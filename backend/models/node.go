@@ -1,0 +1,53 @@
+package models
+
+import "time"
+
+// Node represents a pNode in the Xandeum network
+type Node struct {
+	// Identity
+	ID      string `json:"id"` // Constructed from IP:Port or Pubkey if available
+	IP      string `json:"ip"`
+	Port    int    `json:"port"`
+	Address string `json:"address"` // "IP:Port"
+	Version string `json:"version"`
+
+	// Status
+	IsOnline  bool      `json:"is_online"`
+	LastSeen  time.Time `json:"last_seen"`
+	FirstSeen time.Time `json:"first_seen"`
+	Status    string    `json:"status"` // "active", "offline"
+
+	// Geo Estimation
+	Country string  `json:"country"`
+	City    string  `json:"city"`
+	Lat     float64 `json:"lat"`
+	Lon     float64 `json:"lon"`
+
+	// Stats (Snapshot)
+	CPUPercent float64 `json:"cpu_percent"`
+	RAMUsed    int64   `json:"ram_used"`
+	RAMTotal   int64   `json:"ram_total"`
+	// Storage
+	StorageCapacity int64 `json:"storage_capacity"` // file_size
+	StorageUsed     int64 `json:"storage_used"`     // metadata.total_bytes
+
+	UptimeSeconds   int64 `json:"uptime_seconds"`
+	PacketsReceived int64 `json:"packets_received"`
+	PacketsSent     int64 `json:"packets_sent"`
+
+	// Metrics (Derived & tracked)
+	UptimeScore      float64 `json:"uptime_score"`
+	PerformanceScore float64 `json:"performance_score"`
+	ResponseTime     int64   `json:"response_time"` // ms
+
+	// History
+	CallHistory  []bool `json:"-"` // Last 10 calls, true=success
+	SuccessCalls int    `json:"-"` // Count of true in history (cached or calc on fly)
+	TotalCalls   int    `json:"-"` // Count of attempts tracked
+
+	// Staking (Mocked for now)
+	TotalStake  float64 `json:"total_stake"`
+	Commission  float64 `json:"commission"`
+	APY         float64 `json:"apy"`
+	BoostFactor float64 `json:"boost_factor"` // 16x, 176x etc
+}
