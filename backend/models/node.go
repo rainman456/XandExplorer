@@ -45,7 +45,7 @@ type Node struct {
 	SuccessCalls int    `json:"-"` // Count of true in history (cached or calc on fly)
 	TotalCalls   int    `json:"-"` // Count of attempts tracked
 
-	// Staking (Mocked for now)
+	// Staking
 	TotalStake  float64 `json:"total_stake"`
 	Commission  float64 `json:"commission"`
 	APY         float64 `json:"apy"`

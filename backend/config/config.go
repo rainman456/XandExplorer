@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // Config holds all configuration for the application
@@ -50,6 +52,9 @@ type GeoIPConfig struct {
 
 // LoadConfig loads configuration from Defaults -> File -> Env -> Flags
 func LoadConfig() (*Config, error) {
+	// 0. Load .env file (if exists)
+	_ = godotenv.Load()
+
 	// 1. Initialize with Defaults
 	cfg := &Config{
 		Server: ServerConfig{
@@ -70,7 +75,10 @@ func LoadConfig() (*Config, error) {
 		Polling: PollingConfig{
 			DiscoveryInterval: 60,
 			StatsInterval:     30,
-			StaleThreshold:    5, // 5 minutes
+			// DiscoveryInterval:   60,
+			// StatsInterval:       30,
+			HealthCheckInterval: 60,
+			StaleThreshold:      5, // 5 minutes
 		},
 		Cache: CacheConfig{
 			TTL:     30,
@@ -184,6 +192,11 @@ func loadEnv(cfg *Config) {
 	if val := os.Getenv("STATS_INTERVAL"); val != "" {
 		if p, err := strconv.Atoi(val); err == nil {
 			cfg.Polling.StatsInterval = p
+		}
+	}
+	if val := os.Getenv("HEALTH_CHECK_INTERVAL"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.Polling.HealthCheckInterval = p
 		}
 	}
 

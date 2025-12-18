@@ -134,7 +134,7 @@ func (c *PRPCClient) GetStats(nodeIP string) (*models.PRPCStatsResponse, error) 
 
 // GetPods calls "get_pods"
 func (c *PRPCClient) GetPods(nodeIP string) (*models.PodsResponse, error) {
-	resp, err := c.CallPRPC(nodeIP, "get_pods", nil)
+	resp, err := c.CallPRPC(nodeIP, "get-pods-with-stats", nil)
 	if err != nil {
 		return nil, err
 	}
