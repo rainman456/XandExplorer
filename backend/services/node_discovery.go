@@ -126,21 +126,27 @@ func (nd *NodeDiscovery) discoverPeers() {
 				return
 			}
 			for _, pod := range podsResp.Pods {
-				// The pod.Address usually contains the gossip port (e.g. 9001)
-				// We need to connect via RPC port (e.g. 6000)
+				// Extract host from gossip address
 				host, _, err := net.SplitHostPort(pod.Address)
 				if err != nil {
-					// Fallback if address is just IP? Or log error
-					host = pod.Address // Try as is if split fails
+					host = pod.Address
 				}
 
+				var rpcAddress string
 				if pod.RpcPort > 0 {
-					rpcAddress := net.JoinHostPort(host, strconv.Itoa(pod.RpcPort))
-					nd.processNodeAddress(rpcAddress)
+					rpcAddress = net.JoinHostPort(host, strconv.Itoa(pod.RpcPort))
 				} else {
-					// Fallback to address if no rpc_port specified (unlikely if v0.8.0+)
-					nd.processNodeAddress(pod.Address)
+					rpcAddress = pod.Address
 				}
+
+				// Update existing nodes with pod data before processing
+				nd.nodesMutex.Lock()
+				if existingNode, exists := nd.knownNodes[rpcAddress]; exists {
+					nd.updateNodeFromPod(existingNode, &pod)
+				}
+				nd.nodesMutex.Unlock()
+
+				nd.processNodeAddress(rpcAddress)
 			}
 		}(node)
 	}
@@ -226,16 +232,11 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 		return // Already known
 	}
 
-	 log.Printf("Attempting to connect to node: %s", address)
-
 	// Verify connectivity first
 	verResp, err := nd.prpc.GetVersion(address)
 	if err != nil {
-		log.Printf("Failed to connect to %s: %v", address, err)
 		return
 	}
-	log.Printf("Successfully connected to %s, version: %s", address, verResp.Version)
-
 
 	// Create Node
 	host, portStr, _ := net.SplitHostPort(address)
@@ -278,14 +279,35 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 	nd.knownNodes[id] = newNode
 	nd.nodesMutex.Unlock()
 
-log.Printf("✓ Discovered new node: %s (%s, %s, v%s)", address, country, city, verResp.Version)
-	// Recursive Discovery
+	log.Printf("Discovered new node: %s (%s, %s)", address, country, verResp.Version)
+
+	// Recursive Discovery - get pods and extract additional info
 	go func() {
-		log.Printf("Fetching peers from %s...", address)
 		podsResp, err := nd.prpc.GetPods(address)
 		if err == nil {
 			for _, pod := range podsResp.Pods {
-				nd.processNodeAddress(pod.Address)
+				// Extract host and construct RPC address
+				host, _, err := net.SplitHostPort(pod.Address)
+				if err != nil {
+					host = pod.Address
+				}
+
+				var rpcAddress string
+				if pod.RpcPort > 0 {
+					rpcAddress = net.JoinHostPort(host, strconv.Itoa(pod.RpcPort))
+				} else {
+					rpcAddress = pod.Address
+				}
+
+				// Check if this pod is our current node and update with pod data
+				nd.nodesMutex.Lock()
+				if existingNode, exists := nd.knownNodes[rpcAddress]; exists {
+					nd.updateNodeFromPod(existingNode, &pod)
+				}
+				nd.nodesMutex.Unlock()
+
+				// Process as new node if not known
+				nd.processNodeAddress(rpcAddress)
 			}
 		}
 	}()
@@ -328,4 +350,34 @@ func (nd *NodeDiscovery) GetNodes() []*models.Node {
 		nodes = append(nodes, n)
 	}
 	return nodes
+}
+
+
+func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
+	node.Pubkey = pod.Pubkey
+	node.IsPublic = pod.IsPublic
+	node.Version = pod.Version
+	node.StorageCapacity = pod.StorageCommitted
+	node.StorageUsed = pod.StorageUsed
+	node.StorageUsagePercent = pod.StorageUsagePercent
+	node.UptimeSeconds = pod.Uptime
+	
+	// Update LastSeen if we have timestamp
+	if pod.LastSeenTimestamp > 0 {
+		node.LastSeen = time.Unix(pod.LastSeenTimestamp, 0)
+	}
+	
+	// Calculate uptime score from the uptime field
+	if pod.Uptime > 0 {
+		knownDuration := time.Since(node.FirstSeen).Seconds()
+		if knownDuration > 0 {
+			ratio := float64(pod.Uptime) / knownDuration
+			if ratio > 1 {
+				ratio = 1
+			}
+			node.UptimeScore = ratio * 100
+		} else {
+			node.UptimeScore = 100
+		}
+	}
 }
