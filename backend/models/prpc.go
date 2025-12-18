@@ -83,6 +83,8 @@ type PodsResponse struct {
 
 type Pod struct {
 	Address           string `json:"address"`
+	RpcPort           int    `json:"rpc_port"`
+	IsPublic          bool   `json:"is_public"`
 	Version           string `json:"version"`
 	LastSeen          string `json:"last_seen"`
 	LastSeenTimestamp int64  `json:"last_seen_timestamp"`

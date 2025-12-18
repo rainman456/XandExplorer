@@ -13,10 +13,9 @@ import (
 )
 
 type NodeDiscovery struct {
-	cfg        *config.Config
-	prpc       *PRPCClient
-	geo        *utils.GeoResolver
-	stakingGen *utils.MockStakingGenerator
+	cfg  *config.Config
+	prpc *PRPCClient
+	geo  *utils.GeoResolver
 
 	knownNodes map[string]*models.Node // Key: IP (or IP:Port if multiple nodes per IP possible? ID is best)
 	nodesMutex sync.RWMutex
@@ -26,10 +25,10 @@ type NodeDiscovery struct {
 
 func NewNodeDiscovery(cfg *config.Config, prpc *PRPCClient, geo *utils.GeoResolver) *NodeDiscovery {
 	return &NodeDiscovery{
-		cfg:        cfg,
-		prpc:       prpc,
-		geo:        geo,
-		stakingGen: utils.NewMockStakingGenerator(),
+		cfg:  cfg,
+		prpc: prpc,
+		geo:  geo,
+
 		knownNodes: make(map[string]*models.Node),
 		stopChan:   make(chan struct{}),
 	}
@@ -98,7 +97,7 @@ func (nd *NodeDiscovery) Bootstrap() {
 	}
 	// Run initial collection immediately after bootstrap phase to populate data quickly
 	go nd.discoverPeers()
-	go nd.healthCheck() // Pings to verify online status
+	go nd.healthCheck()  // Pings to verify online status
 	go nd.collectStats() // Get initial stats
 }
 
@@ -107,7 +106,7 @@ func (nd *NodeDiscovery) discoverPeers() {
 	nodes := nd.GetNodes()
 	for _, node := range nodes {
 		if !node.IsOnline {
-			continue 
+			continue
 		}
 		go func(n *models.Node) {
 			podsResp, err := nd.prpc.GetPods(n.Address)
@@ -115,7 +114,21 @@ func (nd *NodeDiscovery) discoverPeers() {
 				return
 			}
 			for _, pod := range podsResp.Pods {
-				nd.processNodeAddress(pod.Address)
+				// The pod.Address usually contains the gossip port (e.g. 9001)
+				// We need to connect via RPC port (e.g. 6000)
+				host, _, err := net.SplitHostPort(pod.Address)
+				if err != nil {
+					// Fallback if address is just IP? Or log error
+					host = pod.Address // Try as is if split fails
+				}
+
+				if pod.RpcPort > 0 {
+					rpcAddress := net.JoinHostPort(host, strconv.Itoa(pod.RpcPort))
+					nd.processNodeAddress(rpcAddress)
+				} else {
+					// Fallback to address if no rpc_port specified (unlikely if v0.8.0+)
+					nd.processNodeAddress(pod.Address)
+				}
 			}
 		}(node)
 	}
@@ -237,12 +250,11 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 	newNode.Lat = lat
 	newNode.Lon = lon
 
-	// 3. Mock Staking
-	stake, comm, boost, apy := nd.stakingGen.GenerateMetrics()
-	newNode.TotalStake = stake
-	newNode.Commission = comm
-	newNode.BoostFactor = boost
-	newNode.APY = apy
+	// 3. Staking (Real data pending)
+	newNode.TotalStake = 0
+	newNode.Commission = 0
+	newNode.BoostFactor = 0
+	newNode.APY = 0
 
 	// Store
 	nd.nodesMutex.Lock()
@@ -266,8 +278,8 @@ func (nd *NodeDiscovery) updateStats(node *models.Node, stats *models.PRPCStatsR
 	node.CPUPercent = stats.Stats.CPUPercent
 	node.RAMUsed = stats.Stats.RAMUsed
 	node.RAMTotal = stats.Stats.RAMTotal
-	node.StorageCapacity = stats.FileSize        
-	node.StorageUsed = stats.Metadata.TotalBytes 
+	node.StorageCapacity = stats.FileSize
+	node.StorageUsed = stats.Metadata.TotalBytes
 
 	node.UptimeSeconds = stats.Stats.Uptime
 	node.PacketsReceived = stats.Stats.PacketsReceived
@@ -278,7 +290,7 @@ func (nd *NodeDiscovery) updateStats(node *models.Node, stats *models.PRPCStatsR
 		if knownDuration > 0 {
 			ratio := float64(node.UptimeSeconds) / knownDuration
 			if ratio > 1 {
-				ratio = 1 
+				ratio = 1
 			}
 			node.UptimeScore = ratio * 100
 		} else {

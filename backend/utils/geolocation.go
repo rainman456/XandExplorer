@@ -95,7 +95,7 @@ func (g *GeoResolver) Lookup(ipStr string) (string, string, float64, float64) {
 		}
 	}
 
-	// 4. Mock Fallback
+	// 4. Default Fallback
 	if !found {
 		country = "Unknown"
 		city = "Unknown"
