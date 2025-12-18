@@ -91,10 +91,22 @@ func (nd *NodeDiscovery) runHealthLoop() {
 // Bootstrap loads initial nodes from config and starts discovery
 func (nd *NodeDiscovery) Bootstrap() {
 	log.Println("Starting Bootstrap process...")
+	// for _, seed := range nd.cfg.Server.SeedNodes {
+	// 	log.Printf("Bootstrapping from seed: %s", seed)
+	// 	nd.processNodeAddress(seed)
+	// }
+	if len(nd.cfg.Server.SeedNodes) == 0 {
+		log.Println("WARNING: No seed nodes configured! Set SEED_NODES environment variable.")
+		return
+	}
+
 	for _, seed := range nd.cfg.Server.SeedNodes {
 		log.Printf("Bootstrapping from seed: %s", seed)
 		nd.processNodeAddress(seed)
 	}
+
+	// Wait for initial connection
+	time.Sleep(2 * time.Second)
 	// Run initial collection immediately after bootstrap phase to populate data quickly
 	go nd.discoverPeers()
 	go nd.healthCheck()  // Pings to verify online status
@@ -214,11 +226,16 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 		return // Already known
 	}
 
+	 log.Printf("Attempting to connect to node: %s", address)
+
 	// Verify connectivity first
 	verResp, err := nd.prpc.GetVersion(address)
 	if err != nil {
+		log.Printf("Failed to connect to %s: %v", address, err)
 		return
 	}
+	log.Printf("Successfully connected to %s, version: %s", address, verResp.Version)
+
 
 	// Create Node
 	host, portStr, _ := net.SplitHostPort(address)
@@ -261,10 +278,10 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 	nd.knownNodes[id] = newNode
 	nd.nodesMutex.Unlock()
 
-	log.Printf("Discovered new node: %s (%s, %s)", address, country, verResp.Version)
-
+log.Printf("✓ Discovered new node: %s (%s, %s, v%s)", address, country, city, verResp.Version)
 	// Recursive Discovery
 	go func() {
+		log.Printf("Fetching peers from %s...", address)
 		podsResp, err := nd.prpc.GetPods(address)
 		if err == nil {
 			for _, pod := range podsResp.Pods {

@@ -10,6 +10,8 @@ type Node struct {
 	Port    int    `json:"port"`
 	Address string `json:"address"` // "IP:Port"
 	Version string `json:"version"`
+	   Pubkey   string `json:"pubkey"`   // Added
+    IsPublic bool   `json:"is_public"` // Added
 
 	// Status
 	IsOnline  bool      `json:"is_online"`
