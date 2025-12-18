@@ -24,22 +24,18 @@ type GeoResolver struct {
 	cache      sync.Map // map[string]GeoLocation
 }
 
+// NewGeoResolver creates a new GeoResolver. It never returns an error - if the database
+// can't be loaded, it falls back to API-only mode.
 func NewGeoResolver(dbPath string) (*GeoResolver, error) {
 	var db *geoip2.Reader
-	var err error
 
 	if dbPath != "" {
+		var err error
 		db, err = geoip2.Open(dbPath)
 		if err != nil {
-			// We can return error, or log and proceed without DB (fallback mode)
-			// Returning error as request implies DB is expected if path provided?
-			// Step 8: "Implement internal caching... Fall back to API if database missing".
-			// But NewGeoResolver error usually halts startup.
-			// I'll return nil error but with nil db if it fails?
-			// But user main.go logs fatal on error.
-			// Let's stick to existing behavior: return error if open fails.
-			// User can choose empty string if they want purely API.
-			return nil, err
+			// Log but don't fail - we'll use API fallback
+			fmt.Printf("Warning: Could not open GeoIP database at %s: %v. Using API fallback only.\n", dbPath, err)
+			db = nil
 		}
 	}
 
@@ -57,7 +53,13 @@ func (g *GeoResolver) Close() {
 	}
 }
 
+// Lookup is safe to call even if GeoResolver is nil or has no database
 func (g *GeoResolver) Lookup(ipStr string) (string, string, float64, float64) {
+	// Handle nil receiver gracefully
+	if g == nil {
+		return "Unknown", "Unknown", 0, 0
+	}
+
 	// 1. Check Cache
 	if val, ok := g.cache.Load(ipStr); ok {
 		loc := val.(GeoLocation)
@@ -68,7 +70,7 @@ func (g *GeoResolver) Lookup(ipStr string) (string, string, float64, float64) {
 	var lat, lon float64
 	var found bool
 
-	// 2. Try DB
+	// 2. Try DB (if available)
 	if g.db != nil {
 		ip := net.ParseIP(ipStr)
 		if ip != nil {
@@ -103,7 +105,7 @@ func (g *GeoResolver) Lookup(ipStr string) (string, string, float64, float64) {
 		lon = 0
 	}
 
-	// Cache result (indefinitely as per requirements)
+	// Cache result
 	g.cache.Store(ipStr, GeoLocation{
 		Country: country,
 		City:    city,
@@ -123,8 +125,6 @@ type ipApiResponse struct {
 }
 
 func (g *GeoResolver) fetchFromAPI(ip string) (*GeoLocation, error) {
-	// Skip private IPs or invalid for API? API handles them by erroring usually.
-
 	url := fmt.Sprintf("http://ip-api.com/json/%s", ip)
 	resp, err := g.httpClient.Get(url)
 	if err != nil {
