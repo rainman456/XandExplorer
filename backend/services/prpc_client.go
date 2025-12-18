@@ -87,7 +87,7 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http error: %d", resp.StatusCode)
+    return nil, fmt.Errorf("http error %d from %s %s", resp.StatusCode, method, nodeIP)
 	}
 
 	// 5. Decode Response
@@ -106,7 +106,7 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 
 // GetVersion calls "get_version"
 func (c *PRPCClient) GetVersion(nodeIP string) (*models.VersionResponse, error) {
-	resp, err := c.CallPRPC(nodeIP, "get_version", nil)
+	resp, err := c.CallPRPC(nodeIP, "get-version", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (c *PRPCClient) GetVersion(nodeIP string) (*models.VersionResponse, error) 
 
 // GetStats calls "get_stats"
 func (c *PRPCClient) GetStats(nodeIP string) (*models.PRPCStatsResponse, error) {
-	resp, err := c.CallPRPC(nodeIP, "get_stats", nil)
+	resp, err := c.CallPRPC(nodeIP, "get-stats", nil)
 	if err != nil {
 		return nil, err
 	}
