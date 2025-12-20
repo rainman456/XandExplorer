@@ -137,6 +137,8 @@ import (
 func main() {
 	// 1. Config
 	cfg, err := config.LoadConfig()
+	fmt.Printf("Loaded MongoDB URI: '%s'\n", cfg.MongoDB.URI)
+//fmt.Printf("URI length: %d\n", len(config.MongoDB.URI))
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -149,11 +151,24 @@ func main() {
 	}
 	defer geo.Close()
 
+
+		mongoService, err := services.NewMongoDBService(cfg)
+	if err != nil {
+		log.Printf("Warning: MongoDB connection failed: %v", err)
+		log.Println("Analytics features will be disabled")
+		mongoService = nil // Set to nil if connection fails
+	}
+	if mongoService != nil {
+		defer mongoService.Close()
+	}
+
 	// Clients
 	prpc := services.NewPRPCClient(cfg)
 
 	// Discovery
-	discovery := services.NewNodeDiscovery(cfg, prpc, geo)
+	creditsService := services.NewCreditsService()
+
+	discovery := services.NewNodeDiscovery(cfg, prpc, geo,creditsService)
 
 	// Aggregator
 	aggregator := services.NewDataAggregator(discovery)
@@ -163,7 +178,12 @@ func main() {
 
 	// 3. New Feature Services
 	alertService := services.NewAlertService(cache)
-	historyService := services.NewHistoryService(cache)
+	//historyService := services.NewHistoryService(cache)
+	historyService := services.NewHistoryService(cache, mongoService)
+
+	analyticsHandlers := handlers.NewAnalyticsHandlers(mongoService)
+
+
 	calculatorService := services.NewCalculatorService()
 	topologyService := services.NewTopologyService(cache, discovery)
 	comparisonService := services.NewComparisonService(cache)
@@ -173,6 +193,7 @@ func main() {
 	cache.StartCacheWarmer()
 	alertService.Start()
 	historyService.Start()
+	creditsService.Start() 
 
 	// 5. Web Server
 	e := echo.New()
@@ -199,6 +220,8 @@ func main() {
 	calculatorHandlers := handlers.NewCalculatorHandlers(calculatorService)
 	topologyHandlers := handlers.NewTopologyHandlers(topologyService)
 	comparisonHandlers := handlers.NewComparisonHandlers(comparisonService)
+	creditsHandlers := handlers.NewCreditsHandlers(creditsService)
+
 
 	// 7. Routes
 	// System
@@ -236,6 +259,23 @@ func main() {
 	calculator.GET("/roi", calculatorHandlers.EstimateROI)
 	calculator.POST("/redundancy", calculatorHandlers.SimulateRedundancy)
 	calculator.GET("/redundancy", calculatorHandlers.SimulateRedundancy) // Also support GET
+
+
+	//Credits
+	credits := api.Group("/credits")
+	credits.GET("", creditsHandlers.GetAllCredits)
+	credits.GET("/top", creditsHandlers.GetTopCredits)
+	credits.GET("/:pubkey", creditsHandlers.GetNodeCredits)
+
+
+		//  ANALYTICS ROUTES
+	analytics := api.Group("/analytics")
+	analytics.GET("/daily-health", analyticsHandlers.GetDailyHealth)
+	analytics.GET("/high-uptime", analyticsHandlers.GetHighUptimeNodes)
+	analytics.GET("/storage-growth", analyticsHandlers.GetStorageGrowth)
+	analytics.GET("/recently-joined", analyticsHandlers.GetRecentlyJoined)
+	analytics.GET("/weekly-comparison", analyticsHandlers.GetWeeklyComparison)
+	analytics.GET("/node-graveyard", analyticsHandlers.GetNodeGraveyard)
 
 	// Topology endpoints
 	topology := api.Group("/topology")
@@ -300,6 +340,7 @@ func main() {
 	cache.Stop()
 	alertService.Stop()
 	historyService.Stop()
+	creditsService.Stop()
 
 	if err := e.Shutdown(ctx); err != nil {
 		e.Logger.Fatal(err)

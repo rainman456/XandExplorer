@@ -52,7 +52,7 @@ func TestNodeDiscovery_Bootstrap(t *testing.T) {
 
 	prpc := NewPRPCClient(cfg)
 	geo, _ := utils.NewGeoResolver("") // No DB
-	nd := NewNodeDiscovery(cfg, prpc, geo)
+	nd := NewNodeDiscovery(cfg, prpc, geo,nil)
 
 	// 4. Run Bootstrap
 	// We call Bootstrap synchronously for testing, or wait

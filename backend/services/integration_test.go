@@ -13,7 +13,7 @@ func TestIntegration_Aggregation(t *testing.T) {
 	// 1. Setup Dependencies (Minimal)
 	cfg := &config.Config{}
 	geo, _ := utils.NewGeoResolver("")
-	nd := NewNodeDiscovery(cfg, nil, geo)
+	nd := NewNodeDiscovery(cfg, nil, geo,nil)
 	// Note: We don't need a real PRPCClient because we manually inject nodes
 
 	// 2. Inject Known Nodes directly (since we are in package 'services')

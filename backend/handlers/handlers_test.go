@@ -66,7 +66,7 @@ func TestGetNode_NotFound(t *testing.T) {
 
 	// Empty Discovery/Cache
 	cache := services.NewCacheService(cfg, nil)
-	discovery := services.NewNodeDiscovery(cfg, nil, nil)
+	discovery := services.NewNodeDiscovery(cfg, nil, nil, nil)
 
 	handler := NewHandler(cfg, cache, discovery, nil)
 
