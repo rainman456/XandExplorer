@@ -100,6 +100,9 @@ type Node struct {
 	UptimeScore      float64 `json:"uptime_score"`
 	PerformanceScore float64 `json:"performance_score"`
 	ResponseTime     int64   `json:"response_time"` // ms
+		Credits       int64     `json:"credits"`        // Reputation score
+	CreditsRank   int       `json:"credits_rank"`   // Rank by credits
+	CreditsChange int64     `json:"credits_change"`
 
 	// History
 	CallHistory  []bool `json:"-"` // Last 10 calls, true=success
@@ -111,4 +114,9 @@ type Node struct {
 	Commission  float64 `json:"commission"`
 	APY         float64 `json:"apy"`
 	BoostFactor float64 `json:"boost_factor"` // 16x, 176x etc
+
+	VersionStatus   string `json:"version_status"`    // "current", "outdated", "deprecated", "unknown"
+	IsUpgradeNeeded bool   `json:"is_upgrade_needed"`
+	UpgradeSeverity string `json:"upgrade_severity"`  // "none", "info", "warning", "critical"
+	UpgradeMessage  string `json:"upgrade_message"`
 }

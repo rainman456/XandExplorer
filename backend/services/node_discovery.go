@@ -6,29 +6,55 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"strings"
 
 	"xand/config"
 	"xand/models"
 	"xand/utils"
 )
 
+// type NodeDiscovery struct {
+// 	cfg  *config.Config
+// 	prpc *PRPCClient
+// 	geo  *utils.GeoResolver
+
+// 	knownNodes map[string]*models.Node // Key: IP (or IP:Port if multiple nodes per IP possible? ID is best)
+// 	nodesMutex sync.RWMutex
+
+// 	stopChan chan struct{}
+// }
+
+// func NewNodeDiscovery(cfg *config.Config, prpc *PRPCClient, geo *utils.GeoResolver) *NodeDiscovery {
+// 	return &NodeDiscovery{
+// 		cfg:  cfg,
+// 		prpc: prpc,
+// 		geo:  geo,
+
+// 		knownNodes: make(map[string]*models.Node),
+// 		stopChan:   make(chan struct{}),
+// 	}
+// }
+
+
+
 type NodeDiscovery struct {
-	cfg  *config.Config
-	prpc *PRPCClient
-	geo  *utils.GeoResolver
+	cfg     *config.Config
+	prpc    *PRPCClient
+	geo     *utils.GeoResolver
+	credits *CreditsService // ADD THIS
 
-	knownNodes map[string]*models.Node // Key: IP (or IP:Port if multiple nodes per IP possible? ID is best)
+	knownNodes map[string]*models.Node
 	nodesMutex sync.RWMutex
-
-	stopChan chan struct{}
+	stopChan   chan struct{}
 }
 
-func NewNodeDiscovery(cfg *config.Config, prpc *PRPCClient, geo *utils.GeoResolver) *NodeDiscovery {
+// Update NewNodeDiscovery
+func NewNodeDiscovery(cfg *config.Config, prpc *PRPCClient, geo *utils.GeoResolver, credits *CreditsService) *NodeDiscovery {
 	return &NodeDiscovery{
-		cfg:  cfg,
-		prpc: prpc,
-		geo:  geo,
-
+		cfg:        cfg,
+		prpc:       prpc,
+		geo:        geo,
+		credits:    credits, // ADD THIS
 		knownNodes: make(map[string]*models.Node),
 		stopChan:   make(chan struct{}),
 	}
@@ -139,10 +165,14 @@ func (nd *NodeDiscovery) discoverPeers() {
 					rpcAddress = pod.Address
 				}
 
-				// Update existing nodes with pod data before processing
+				// Update existing nodes with pod data
 				nd.nodesMutex.Lock()
 				if existingNode, exists := nd.knownNodes[rpcAddress]; exists {
 					nd.updateNodeFromPod(existingNode, &pod)
+					// ADD THIS: Migrate to pubkey-based ID if we have it now
+					if pod.Pubkey != "" && existingNode.ID != pod.Pubkey {
+						nd.updateNodeID(existingNode, pod.Pubkey)
+					}
 				}
 				nd.nodesMutex.Unlock()
 
@@ -154,7 +184,7 @@ func (nd *NodeDiscovery) discoverPeers() {
 
 // collectStats queries all nodes for their stats
 func (nd *NodeDiscovery) collectStats() {
-	nodes := nd.GetNodes() // Snapshot
+	nodes := nd.GetNodes()
 	for _, node := range nodes {
 		go func(n *models.Node) {
 			statsResp, err := nd.prpc.GetStats(n.Address)
@@ -162,7 +192,9 @@ func (nd *NodeDiscovery) collectStats() {
 				nd.nodesMutex.Lock()
 				if storedNode, exists := nd.knownNodes[n.ID]; exists {
 					nd.updateStats(storedNode, statsResp)
-					storedNode.LastSeen = time.Now() // Successful stats implies seen
+					storedNode.LastSeen = time.Now()
+					// ADD THIS: Enrich with credits
+					nd.enrichNodeWithCredits(storedNode)
 				}
 				nd.nodesMutex.Unlock()
 			}
@@ -199,6 +231,12 @@ func (nd *NodeDiscovery) healthCheck() {
 				storedNode.IsOnline = true
 				storedNode.LastSeen = time.Now()
 				storedNode.Version = verResp.Version
+				
+				versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
+				storedNode.VersionStatus = versionStatus
+				storedNode.IsUpgradeNeeded = needsUpgrade
+				storedNode.UpgradeSeverity = severity
+				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
 			} else {
 				// Handle Stale
 				if time.Since(storedNode.LastSeen) > time.Duration(nd.cfg.Polling.StaleThreshold)*time.Minute {
@@ -222,19 +260,39 @@ func updateCallHistory(n *models.Node, success bool) {
 
 // processNodeAddress handles a potentially new node address
 func (nd *NodeDiscovery) processNodeAddress(address string) {
+	// First, verify connectivity and get basic info
+	verResp, err := nd.prpc.GetVersion(address)
+	if err != nil {
+		return
+	}
+
+	// Try to get pubkey from pods list
+	var pubkey string
+	podsResp, err := nd.prpc.GetPods(address)
+	if err == nil && len(podsResp.Pods) > 0 {
+		// Find this node in its own pods list by matching address
+		host, _, _ := net.SplitHostPort(address)
+		for _, pod := range podsResp.Pods {
+			podHost, _, _ := net.SplitHostPort(pod.Address)
+			if podHost == host && pod.Pubkey != "" {
+				pubkey = pod.Pubkey
+				break
+			}
+		}
+	}
+
+	// Use pubkey as ID if available, otherwise fall back to address
+	// This prevents duplicates when IP changes
 	id := address
+	if pubkey != "" {
+		id = pubkey
+	}
 
 	nd.nodesMutex.RLock()
 	_, exists := nd.knownNodes[id]
 	nd.nodesMutex.RUnlock()
 
 	if exists {
-		return // Already known
-	}
-
-	// Verify connectivity first
-	verResp, err := nd.prpc.GetVersion(address)
-	if err != nil {
 		return
 	}
 
@@ -243,10 +301,11 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 	port, _ := strconv.Atoi(portStr)
 
 	newNode := &models.Node{
-		ID:        address,
+		ID:        id,       // Now uses pubkey if available
 		Address:   address,
 		IP:        host,
 		Port:      port,
+		Pubkey:    pubkey,   // Store pubkey separately
 		Version:   verResp.Version,
 		IsOnline:  true,
 		FirstSeen: time.Now(),
@@ -379,5 +438,60 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 		} else {
 			node.UptimeScore = 100
 		}
+	}
+	
+	// ADD THIS: Update version status when version changes
+	if pod.Version != "" {
+		versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(pod.Version, nil)
+		node.VersionStatus = versionStatus
+		node.IsUpgradeNeeded = needsUpgrade
+		node.UpgradeSeverity = severity
+		node.UpgradeMessage = utils.GetUpgradeMessage(pod.Version, nil)
+	}
+	
+	// ADD THIS: If we now have a pubkey and node ID is still address-based, migrate
+	if pod.Pubkey != "" && node.ID != pod.Pubkey && !strings.Contains(node.ID, ":") == false {
+		// Node ID is currently an address (contains ":"), but we have pubkey now
+		// This will be handled by updateNodeID in the caller
+		node.Pubkey = pod.Pubkey
+	}
+}
+
+
+
+// Update node ID to pubkey if we just learned it
+func (nd *NodeDiscovery) updateNodeID(node *models.Node, pubkey string) {
+	if pubkey == "" || node.ID == pubkey {
+		return // Already using pubkey or no pubkey available
+	}
+
+	// If node was tracked by address, migrate to pubkey
+	nd.nodesMutex.Lock()
+	defer nd.nodesMutex.Unlock()
+
+	if node.ID != pubkey && node.Pubkey == "" {
+		// Remove old entry
+		delete(nd.knownNodes, node.ID)
+		// Update ID
+		node.ID = pubkey
+		node.Pubkey = pubkey
+		// Re-add with new ID
+		nd.knownNodes[pubkey] = node
+		log.Printf("Migrated node from address %s to pubkey %s", node.Address, pubkey)
+	}
+}
+
+
+
+func (nd *NodeDiscovery) enrichNodeWithCredits(node *models.Node) {
+	if nd.credits == nil || node.Pubkey == "" {
+		return
+	}
+
+	credits, exists := nd.credits.GetCredits(node.Pubkey)
+	if exists {
+		node.Credits = credits.Credits
+		node.CreditsRank = credits.Rank
+		node.CreditsChange = credits.CreditsChange
 	}
 }
