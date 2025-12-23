@@ -40,10 +40,17 @@ func (h *Handler) GetNodes(c echo.Context) error {
 	// 3. Last resort: Discovery
 	if !found {
 		nodes = h.Discovery.GetNodes()
-		// Discovery logic doesn't have stale/fresh concept exposed, assume fresh enough
 	}
 
-	if len(nodes) == 0 {
+	// 4. Filter out nodes without pubkeys (incomplete discovery)
+	completeNodes := make([]*models.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Pubkey != "" {
+			completeNodes = append(completeNodes, node)
+		}
+	}
+
+	if len(completeNodes) == 0 {
 		return c.JSON(http.StatusOK, []models.Node{})
 	}
 
@@ -52,11 +59,8 @@ func (h *Handler) GetNodes(c echo.Context) error {
 		c.Response().Header().Set("X-Data-Stale", "true")
 	}
 
-	// Sort
-	sortedNodes := make([]*models.Node, len(nodes))
-	copy(sortedNodes, nodes)
-
-	sort.Slice(sortedNodes, func(i, j int) bool {
+	// Sort by status and uptime
+	sort.Slice(completeNodes, func(i, j int) bool {
 		statusWeight := func(s string) int {
 			switch s {
 			case "online":
@@ -69,10 +73,17 @@ func (h *Handler) GetNodes(c echo.Context) error {
 				return 0
 			}
 		}
-		return statusWeight(sortedNodes[i].Status) > statusWeight(sortedNodes[j].Status)
+		
+		// First by status
+		if statusWeight(completeNodes[i].Status) != statusWeight(completeNodes[j].Status) {
+			return statusWeight(completeNodes[i].Status) > statusWeight(completeNodes[j].Status)
+		}
+		
+		// Then by uptime score
+		return completeNodes[i].UptimeScore > completeNodes[j].UptimeScore
 	})
 
-	return c.JSON(http.StatusOK, sortedNodes)
+	return c.JSON(http.StatusOK, completeNodes)
 }
 
 // GetNode godoc

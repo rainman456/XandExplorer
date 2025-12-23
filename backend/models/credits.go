@@ -13,12 +13,11 @@ type PodCredits struct {
 
 // PodCreditsResponse from the API
 type PodCreditsResponse struct {
-	Pods       []PodCreditsEntry `json:"pods"`
-	TotalCount int               `json:"total_count"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	PodsCredits []PodCreditsEntry `json:"pods_credits"`
+	Status      string            `json:"status"`
 }
 
 type PodCreditsEntry struct {
-	Pubkey  string `json:"pubkey"`
+	PodID   string `json:"pod_id"`
 	Credits int64  `json:"credits"`
 }
