@@ -242,43 +242,50 @@ func (cs *CacheService) connectRedis() {
 	redisDB := cs.cfg.Redis.DB
 	useTLS := cs.cfg.Redis.UseTLS
 
+	// Auto-detect for Leapcell
+	if strings.Contains(redisAddr, "leapcell") {
+		useTLS = true
+		log.Printf("Detected Leapcell Redis, forcing TLS")
+	}
+
 	options := &redis.Options{
 		Addr:         redisAddr,
 		Password:     redisPassword,
 		DB:           redisDB,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     10,
-		MinIdleConns: 5,
+		DialTimeout:  10 * time.Second,  // Longer for cloud
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		PoolSize:     5,                 // Reduced pool size
+		MinIdleConns: 1,                 // Minimal idle connections
+		MaxRetries:   3,
+		PoolTimeout:  10 * time.Second,
 	}
 
-	// Enable TLS if configured or if address looks like a managed Redis service
-	if useTLS || isLikelyManagedRedis(redisAddr) {
+	if useTLS {
 		options.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			// For managed Redis services, we usually need to skip verification
-			// or use the proper CA. Most managed services work with InsecureSkipVerify.
-			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, // Leapcell uses shared certs
 		}
-		log.Printf("Connecting to Redis with TLS enabled")
+		log.Printf("TLS enabled for Redis connection")
 	}
 
 	cs.redis = redis.NewClient(options)
 
-	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Test with longer timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := cs.redis.Ping(ctx).Result()
+	pong, err := cs.redis.Ping(ctx).Result()
 	if err != nil {
 		log.Printf("⚠️  Redis connection failed: %v", err)
+		log.Printf("⚠️  Attempted: %s (TLS: %v, Password: %v)", 
+			redisAddr, useTLS, redisPassword != "")
 		log.Printf("⚠️  Running in DEGRADED mode (in-memory cache only)")
 		cs.setMode(CacheModeInMemory)
 		return
 	}
 
-	log.Printf("✓ Redis connected successfully at %s", redisAddr)
+	log.Printf("✓ Redis connected successfully at %s (response: %s)", redisAddr, pong)
 	cs.setMode(CacheModeRedis)
 }
 
