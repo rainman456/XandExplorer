@@ -8,15 +8,27 @@ import (
 
 // DetermineStatus updates the node's status based on latency and uptime
 func DetermineStatus(n *models.Node) {
-	// Rules:
-	// Online: Last RPC < 2min AND Uptime > 95% AND Response < 1000ms
-	// Warning: Last RPC < 5min AND Uptime 85-95% AND Response 1000-3000ms
-	// Offline: Last RPC > 5min OR Unable to connect OR Uptime < 85%
-
 	lastSeen := time.Since(n.LastSeen)
 
-	// Check Offline triggers first (Precedence)
-	if lastSeen > 5*time.Minute || n.UptimeScore < 85 {
+	// If node was just discovered (within last 5 minutes), be lenient
+	justDiscovered := time.Since(n.FirstSeen) < 5*time.Minute
+
+	// Check Offline triggers
+	if lastSeen > 5*time.Minute {
+		n.Status = "offline"
+		return
+	}
+
+	// For newly discovered nodes, use relaxed criteria
+	if justDiscovered {
+		if n.IsOnline && lastSeen < 2*time.Minute {
+			n.Status = "online"
+			return
+		}
+	}
+
+	// For established nodes, use strict criteria
+	if n.UptimeScore < 85 {
 		n.Status = "offline"
 		return
 	}

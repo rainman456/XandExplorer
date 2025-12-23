@@ -58,6 +58,10 @@ func CheckVersionStatus(nodeVersion string, config *VersionConfig) (status strin
 
 // GetUpgradeMessage returns a human-readable upgrade message
 func GetUpgradeMessage(nodeVersion string, config *VersionConfig) string {
+	if config == nil {
+		config = &DefaultVersionConfig
+	}
+	
 	_, needsUpgrade, severity := CheckVersionStatus(nodeVersion, config)
 	
 	if !needsUpgrade {

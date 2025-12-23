@@ -1,8 +1,11 @@
 package services
 
 import (
+	"fmt"
 	"math"
+	"net"
 	"sync"
+	"time"
 
 	"xand/models"
 )
@@ -14,15 +17,128 @@ type TopologyService struct {
 	graphMutex sync.RWMutex
 }
 
+// func NewTopologyService(cache *CacheService, discovery *NodeDiscovery) *TopologyService {
+// 	return &TopologyService{
+// 		cache:     cache,
+// 		discovery: discovery,
+// 		peerGraph: make(map[string][]string),
+// 	}
+// }
+
+
 func NewTopologyService(cache *CacheService, discovery *NodeDiscovery) *TopologyService {
-	return &TopologyService{
+	ts := &TopologyService{
 		cache:     cache,
 		discovery: discovery,
 		peerGraph: make(map[string][]string),
 	}
+	
+	// Start background peer tracking
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		
+		for {
+			ts.TrackPeerRelationships()
+			<-ticker.C
+		}
+	}()
+	
+	return ts
 }
 
+
 // BuildTopology constructs the network graph
+// func (ts *TopologyService) BuildTopology() models.NetworkTopology {
+// 	nodes, _, found := ts.cache.GetNodes(true)
+// 	if !found {
+// 		return models.NetworkTopology{
+// 			Nodes: []models.TopologyNode{},
+// 			Edges: []models.TopologyEdge{},
+// 			Stats: models.TopologyStats{},
+// 		}
+// 	}
+
+// 	topology := models.NetworkTopology{
+// 		Nodes: make([]models.TopologyNode, 0),
+// 		Edges: make([]models.TopologyEdge, 0),
+// 	}
+
+// 	// Build topology nodes
+// 	nodeMap := make(map[string]*models.Node)
+// 	for _, node := range nodes {
+// 		nodeMap[node.ID] = node
+		
+// 		tNode := models.TopologyNode{
+// 			ID:        node.ID,
+// 			Address:   node.Address,
+// 			Status:    node.Status,
+// 			Country:   node.Country,
+// 			City:      node.City,
+// 			Lat:       node.Lat,
+// 			Lon:       node.Lon,
+// 			Version:   node.Version,
+// 			PeerCount: 0, // Will be calculated
+// 		}
+// 		topology.Nodes = append(topology.Nodes, tNode)
+// 	}
+
+// 	// Build edges from peer relationships
+// 	// In a real implementation, we'd track actual peer connections
+// 	// For now, we'll create a simulated topology based on geography
+// 	ts.graphMutex.RLock()
+// 	peerGraph := make(map[string][]string)
+// 	for k, v := range ts.peerGraph {
+// 		peerGraph[k] = v
+// 	}
+// 	ts.graphMutex.RUnlock()
+
+// 	// If we have tracked peer relationships, use them
+// 	if len(peerGraph) > 0 {
+// 		for sourceID, peerIDs := range peerGraph {
+// 			for _, targetID := range peerIDs {
+// 				if _, exists := nodeMap[targetID]; !exists {
+// 					continue
+// 				}
+
+// 				sourceNode := nodeMap[sourceID]
+// 				targetNode := nodeMap[targetID]
+
+// 				edgeType := "local"
+// 				if sourceNode.Country != targetNode.Country {
+// 					edgeType = "bridge"
+// 				}
+
+// 				edge := models.TopologyEdge{
+// 					Source:   sourceID,
+// 					Target:   targetID,
+// 					Type:     edgeType,
+// 					Strength: 5, // Default strength
+// 				}
+// 				topology.Edges = append(topology.Edges, edge)
+// 			}
+// 		}
+// 	} else {
+// 		// Generate simulated topology based on proximity
+// 		topology.Edges = ts.generateSimulatedTopology(nodes, nodeMap)
+// 	}
+
+// 	// Calculate peer counts
+// 	peerCounts := make(map[string]int)
+// 	for _, edge := range topology.Edges {
+// 		peerCounts[edge.Source]++
+// 		peerCounts[edge.Target]++
+// 	}
+// 	for i := range topology.Nodes {
+// 		topology.Nodes[i].PeerCount = peerCounts[topology.Nodes[i].ID]
+// 	}
+
+// 	// Calculate stats
+// 	topology.Stats = ts.calculateTopologyStats(topology)
+
+// 	return topology
+// }
+
 func (ts *TopologyService) BuildTopology() models.NetworkTopology {
 	nodes, _, found := ts.cache.GetNodes(true)
 	if !found {
@@ -38,11 +154,15 @@ func (ts *TopologyService) BuildTopology() models.NetworkTopology {
 		Edges: make([]models.TopologyEdge, 0),
 	}
 
-	// Build topology nodes
+	// Build node map for lookup
 	nodeMap := make(map[string]*models.Node)
 	for _, node := range nodes {
 		nodeMap[node.ID] = node
-		
+	}
+
+	// First pass: Create topology nodes
+	topologyNodesMap := make(map[string]*models.TopologyNode)
+	for _, node := range nodes {
 		tNode := models.TopologyNode{
 			ID:        node.ID,
 			Address:   node.Address,
@@ -52,14 +172,13 @@ func (ts *TopologyService) BuildTopology() models.NetworkTopology {
 			Lat:       node.Lat,
 			Lon:       node.Lon,
 			Version:   node.Version,
-			PeerCount: 0, // Will be calculated
+			PeerCount: 0,
+			Peers:     make([]string, 0), // Initialize empty peers list
 		}
-		topology.Nodes = append(topology.Nodes, tNode)
+		topologyNodesMap[node.ID] = &tNode
 	}
 
-	// Build edges from peer relationships
-	// In a real implementation, we'd track actual peer connections
-	// For now, we'll create a simulated topology based on geography
+	// Build edges and populate peer lists
 	ts.graphMutex.RLock()
 	peerGraph := make(map[string][]string)
 	for k, v := range ts.peerGraph {
@@ -67,8 +186,8 @@ func (ts *TopologyService) BuildTopology() models.NetworkTopology {
 	}
 	ts.graphMutex.RUnlock()
 
-	// If we have tracked peer relationships, use them
 	if len(peerGraph) > 0 {
+		// Use tracked peer relationships
 		for sourceID, peerIDs := range peerGraph {
 			for _, targetID := range peerIDs {
 				if _, exists := nodeMap[targetID]; !exists {
@@ -87,24 +206,32 @@ func (ts *TopologyService) BuildTopology() models.NetworkTopology {
 					Source:   sourceID,
 					Target:   targetID,
 					Type:     edgeType,
-					Strength: 5, // Default strength
+					Strength: 5,
 				}
 				topology.Edges = append(topology.Edges, edge)
+				
+				// ADD THIS: Update peer list for source node
+				if tNode, exists := topologyNodesMap[sourceID]; exists {
+					tNode.Peers = append(tNode.Peers, targetID)
+				}
 			}
 		}
 	} else {
-		// Generate simulated topology based on proximity
+		// Generate simulated topology
 		topology.Edges = ts.generateSimulatedTopology(nodes, nodeMap)
+		
+		// ADD THIS: Build peers list from edges
+		for _, edge := range topology.Edges {
+			if tNode, exists := topologyNodesMap[edge.Source]; exists {
+				tNode.Peers = append(tNode.Peers, edge.Target)
+			}
+		}
 	}
 
-	// Calculate peer counts
-	peerCounts := make(map[string]int)
-	for _, edge := range topology.Edges {
-		peerCounts[edge.Source]++
-		peerCounts[edge.Target]++
-	}
-	for i := range topology.Nodes {
-		topology.Nodes[i].PeerCount = peerCounts[topology.Nodes[i].ID]
+	// Calculate peer counts and convert map to slice
+	for _, tNode := range topologyNodesMap {
+		tNode.PeerCount = len(tNode.Peers)
+		topology.Nodes = append(topology.Nodes, *tNode)
 	}
 
 	// Calculate stats
@@ -112,6 +239,7 @@ func (ts *TopologyService) BuildTopology() models.NetworkTopology {
 
 	return topology
 }
+
 
 func (ts *TopologyService) generateSimulatedTopology(nodes []*models.Node, nodeMap map[string]*models.Node) []models.TopologyEdge {
 	edges := make([]models.TopologyEdge, 0)
@@ -275,4 +403,51 @@ func (ts *TopologyService) haversineDistance(lat1, lon1, lat2, lon2 float64) flo
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 
 	return earthRadius * c
+}
+
+
+
+
+// TrackPeerRelationships discovers and tracks peer connections from pods
+func (ts *TopologyService) TrackPeerRelationships() {
+	nodes, _, found := ts.cache.GetNodes(true)
+	if !found {
+		return
+	}
+
+	ts.graphMutex.Lock()
+	defer ts.graphMutex.Unlock()
+
+	for _, node := range nodes {
+		// Get this node's pods list to see who it's connected to
+		go func(n *models.Node) {
+			podsResp, err := ts.discovery.prpc.GetPods(n.Address)
+			if err != nil {
+				return
+			}
+
+			// Extract peer IDs
+			peerIDs := make([]string, 0)
+			for _, pod := range podsResp.Pods {
+				// Skip self
+				if pod.Pubkey == n.Pubkey {
+					continue
+				}
+				
+				// Add peer by pubkey if available, otherwise by address
+				if pod.Pubkey != "" {
+					peerIDs = append(peerIDs, pod.Pubkey)
+				} else {
+					// Construct address
+					host, _, _ := net.SplitHostPort(pod.Address)
+					rpcAddr := fmt.Sprintf("%s:%d", host, pod.RpcPort)
+					peerIDs = append(peerIDs, rpcAddr)
+				}
+			}
+
+			ts.graphMutex.Lock()
+			ts.peerGraph[n.ID] = peerIDs
+			ts.graphMutex.Unlock()
+		}(node)
+	}
 }

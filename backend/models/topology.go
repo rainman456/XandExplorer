@@ -9,15 +9,16 @@ type NetworkTopology struct {
 
 // TopologyNode represents a node in the network graph
 type TopologyNode struct {
-	ID       string  `json:"id"`
-	Address  string  `json:"address"`
-	Status   string  `json:"status"`
-	Country  string  `json:"country"`
-	City     string  `json:"city"`
-	Lat      float64 `json:"lat"`
-	Lon      float64 `json:"lon"`
-	Version  string  `json:"version"`
-	PeerCount int    `json:"peer_count"`
+	ID       string   `json:"id"`
+	Address  string   `json:"address"`
+	Status   string   `json:"status"`
+	Country  string   `json:"country"`
+	City     string   `json:"city"`
+	Lat      float64  `json:"lat"`
+	Lon      float64  `json:"lon"`
+	Version  string   `json:"version"`
+	PeerCount int     `json:"peer_count"`
+	Peers    []string `json:"peers"` // ADD THIS - list of peer IDs
 }
 
 // TopologyEdge represents a connection between nodes

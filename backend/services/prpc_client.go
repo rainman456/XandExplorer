@@ -4,32 +4,42 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"xand/config"
 	"xand/models"
 )
 
-// PRPCClient handles communication with pNodes
 type PRPCClient struct {
 	config     *config.Config
 	httpClient *http.Client
 }
 
-// NewPRPCClient creates a new client
 func NewPRPCClient(cfg *config.Config) *PRPCClient {
+	// Use configured timeout or default to 5 seconds
+	timeout := cfg.PRPCTimeoutDuration()
+	if timeout > 10*time.Second {
+		timeout = 5 * time.Second // Cap at 5 seconds for faster failures
+	}
+	
 	return &PRPCClient{
 		config: cfg,
 		httpClient: &http.Client{
-			Timeout: cfg.PRPCTimeoutDuration(),
+			Timeout: timeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     30 * time.Second,
+				DisableKeepAlives:   false,
+			},
 		},
 	}
 }
 
-// CallPRPC makes a generic JSON-RPC 2.0 call
 func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) (*models.RPCResponse, error) {
-	// 1. Build Payload
 	reqBody := models.RPCRequest{
 		JSONRPC: "2.0",
 		Method:  method,
@@ -42,12 +52,9 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// 2. Construct URL
 	url := fmt.Sprintf("http://%s/rpc", nodeIP)
 
-	// 3. Execute with Retry
 	var resp *http.Response
-
 	delay := 200 * time.Millisecond
 	maxRetries := c.config.PRPC.MaxRetries
 	if maxRetries <= 0 {
@@ -55,7 +62,6 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 	}
 
 	for i := 0; i < maxRetries; i++ {
-		// Re-create request for each attempt
 		httpReq, reqErr := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 		if reqErr != nil {
 			err = fmt.Errorf("failed to create request: %w", reqErr)
@@ -65,13 +71,11 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 
 		resp, err = c.httpClient.Do(httpReq)
 		if err == nil {
-			// Check for server-side errors that might justify retry (5xx, 429)
 			if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 				resp.Body.Close()
 				err = fmt.Errorf("server error: %d", resp.StatusCode)
-				// fallthrough to retry
 			} else {
-				break // Success (at network level)
+				break
 			}
 		}
 
@@ -87,16 +91,14 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-    return nil, fmt.Errorf("http error %d from %s %s", resp.StatusCode, method, nodeIP)
+		return nil, fmt.Errorf("http error %d from %s %s", resp.StatusCode, method, nodeIP)
 	}
 
-	// 5. Decode Response
 	var rpcResp models.RPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// 6. Check RPC Error
 	if rpcResp.Error != nil {
 		return &rpcResp, fmt.Errorf("rpc error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
@@ -104,7 +106,6 @@ func (c *PRPCClient) CallPRPC(nodeIP string, method string, params interface{}) 
 	return &rpcResp, nil
 }
 
-// GetVersion calls "get_version"
 func (c *PRPCClient) GetVersion(nodeIP string) (*models.VersionResponse, error) {
 	resp, err := c.CallPRPC(nodeIP, "get-version", nil)
 	if err != nil {
@@ -113,26 +114,25 @@ func (c *PRPCClient) GetVersion(nodeIP string) (*models.VersionResponse, error) 
 
 	var verResp models.VersionResponse
 	if err := json.Unmarshal(resp.Result, &verResp); err != nil {
-		return nil, fmt.Errorf("failed to list unmarshal version result: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal version result: %w", err)
 	}
 	return &verResp, nil
 }
 
-// GetStats calls "get_stats"
-func (c *PRPCClient) GetStats(nodeIP string) (*models.PRPCStatsResponse, error) {
-	resp, err := c.CallPRPC(nodeIP, "get-stats", nil)
+func (c *PRPCClient) GetStats(nodeIP string) (*models.StatsResponse, error) {
+	resp, err := c.CallPRPCWithRetry(nodeIP, "get-stats", nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get-stats failed for %s: %w", nodeIP, err)
 	}
 
-	var statsResp models.PRPCStatsResponse
+	var statsResp models.StatsResponse
 	if err := json.Unmarshal(resp.Result, &statsResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal stats result: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal stats from %s: %w", nodeIP, err)
 	}
+	
 	return &statsResp, nil
 }
 
-// GetPods calls "get_pods"
 func (c *PRPCClient) GetPods(nodeIP string) (*models.PodsResponse, error) {
 	resp, err := c.CallPRPC(nodeIP, "get-pods-with-stats", nil)
 	if err != nil {
@@ -141,7 +141,54 @@ func (c *PRPCClient) GetPods(nodeIP string) (*models.PodsResponse, error) {
 
 	var podsResp models.PodsResponse
 	if err := json.Unmarshal(resp.Result, &podsResp); err != nil {
+		log.Printf("ERROR: Failed to unmarshal pods from %s: %v", nodeIP, err)
 		return nil, fmt.Errorf("failed to unmarshal pods result: %w", err)
 	}
+	
 	return &podsResp, nil
+}
+
+func (c *PRPCClient) CallPRPCWithRetry(nodeIP string, method string, params interface{}) (*models.RPCResponse, error) {
+	var lastErr error
+	maxRetries := c.config.PRPC.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, err := c.CallPRPC(nodeIP, method, params)
+		if err == nil {
+			return resp, nil
+		}
+		
+		lastErr = err
+		
+		if isNonRetryableError(err) {
+			break
+		}
+		
+		if attempt < maxRetries {
+			backoff := time.Duration(200*attempt) * time.Millisecond
+			time.Sleep(backoff)
+		}
+	}
+	
+	return nil, fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+func isNonRetryableError(err error) bool {
+	errStr := err.Error()
+	nonRetryable := []string{
+		"Parse error",
+		"Invalid Request",
+		"Method not found",
+		"connection refused", // Don't retry refused connections
+	}
+	
+	for _, msg := range nonRetryable {
+		if strings.Contains(errStr, msg) {
+			return true
+		}
+	}
+	return false
 }

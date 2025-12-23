@@ -17,8 +17,9 @@ type Config struct {
 	PRPC    PRPCConfig    `json:"prpc"`
 	Polling PollingConfig `json:"polling"`
 	Cache   CacheConfig   `json:"cache"`
+	Redis   RedisConfig   `json:"redis"`   // NEW
 	GeoIP   GeoIPConfig   `json:"geoip"`
-	MongoDB MongoDBConfig `json:"mongodb"` // NEW
+	MongoDB MongoDBConfig `json:"mongodb"`
 }
 
 type ServerConfig struct {
@@ -46,11 +47,19 @@ type CacheConfig struct {
 	MaxSize int `json:"max_size"`
 }
 
+// NEW: Redis Configuration
+type RedisConfig struct {
+	Address  string `json:"address"`
+	Password string `json:"password"`
+	DB       int    `json:"db"`
+	Enabled  bool   `json:"enabled"`
+	UseTLS   bool   `json:"use_tls"`
+}
+
 type GeoIPConfig struct {
 	DBPath string `json:"db_path"`
 }
 
-// NEW: MongoDB Configuration
 type MongoDBConfig struct {
 	URI      string `json:"uri"`
 	Database string `json:"database"`
@@ -58,8 +67,10 @@ type MongoDBConfig struct {
 }
 
 func LoadConfig() (*Config, error) {
+	// Load .env file if exists
 	_ = godotenv.Load()
 
+	// Default configuration
 	cfg := &Config{
 		Server: ServerConfig{
 			Port: 8080,
@@ -86,6 +97,13 @@ func LoadConfig() (*Config, error) {
 			TTL:     30,
 			MaxSize: 1000,
 		},
+		Redis: RedisConfig{
+			Address:  "localhost:6379",
+			Password: "",
+			DB:       0,
+			Enabled:  true, // Enable Redis by default
+			UseTLS: true,
+		},
 		GeoIP: GeoIPConfig{
 			DBPath: "",
 		},
@@ -96,6 +114,7 @@ func LoadConfig() (*Config, error) {
 		},
 	}
 
+	// Load from config file if exists
 	configPath := os.Getenv("CONFIG_FILE")
 	if configPath == "" {
 		configPath = "config/config.json"
@@ -112,8 +131,10 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 
+	// Load from environment variables (overrides config file)
 	loadEnv(cfg)
 
+	// Load from command-line flags (overrides everything)
 	fs := flag.NewFlagSet("config", flag.ContinueOnError)
 	var serverPort int
 	var serverHost string
@@ -144,6 +165,7 @@ func isFlagPassed(fs *flag.FlagSet, name string) bool {
 }
 
 func loadEnv(cfg *Config) {
+	// Server configuration
 	if val := os.Getenv("SERVER_PORT"); val != "" {
 		if p, err := strconv.Atoi(val); err == nil {
 			cfg.Server.Port = p
@@ -162,6 +184,8 @@ func loadEnv(cfg *Config) {
 		}
 		cfg.Server.SeedNodes = parts
 	}
+
+	// PRPC configuration
 	if val := os.Getenv("PRPC_PORT"); val != "" {
 		if p, err := strconv.Atoi(val); err == nil {
 			cfg.PRPC.DefaultPort = p
@@ -172,6 +196,13 @@ func loadEnv(cfg *Config) {
 			cfg.PRPC.Timeout = p
 		}
 	}
+	if val := os.Getenv("PRPC_MAX_RETRIES"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.PRPC.MaxRetries = p
+		}
+	}
+
+	// Polling configuration
 	if val := os.Getenv("DISCOVERY_INTERVAL"); val != "" {
 		if p, err := strconv.Atoi(val); err == nil {
 			cfg.Polling.DiscoveryInterval = p
@@ -187,11 +218,46 @@ func loadEnv(cfg *Config) {
 			cfg.Polling.HealthCheckInterval = p
 		}
 	}
+	if val := os.Getenv("STALE_THRESHOLD"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.Polling.StaleThreshold = p
+		}
+	}
+
+	// Cache configuration
+	if val := os.Getenv("CACHE_TTL"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.Cache.TTL = p
+		}
+	}
+	if val := os.Getenv("CACHE_MAX_SIZE"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.Cache.MaxSize = p
+		}
+	}
+
+	// NEW: Redis configuration
+	if val := os.Getenv("REDIS_ADDRESS"); val != "" {
+		cfg.Redis.Address = val
+	}
+	if val := os.Getenv("REDIS_PASSWORD"); val != "" {
+		cfg.Redis.Password = val
+	}
+	if val := os.Getenv("REDIS_DB"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.Redis.DB = p
+		}
+	}
+	if val := os.Getenv("REDIS_ENABLED"); val != "" {
+		cfg.Redis.Enabled = val == "true" || val == "1"
+	}
+
+	// GeoIP configuration
 	if val := os.Getenv("GEOIP_DB_PATH"); val != "" {
 		cfg.GeoIP.DBPath = val
 	}
-	
-	// NEW: MongoDB environment variables
+
+	// MongoDB configuration
 	if val := os.Getenv("MONGODB_URI"); val != "" {
 		cfg.MongoDB.URI = val
 	}
@@ -203,6 +269,7 @@ func loadEnv(cfg *Config) {
 	}
 }
 
+// Helper methods for duration conversion
 func (c *Config) PRPCTimeoutDuration() time.Duration {
 	return time.Duration(c.PRPC.Timeout) * time.Second
 }
