@@ -927,7 +927,7 @@ func NewNodeDiscovery(cfg *config.Config, prpc *PRPCClient, geo *utils.GeoResolv
 		ipToNodes:       make(map[string][]*models.Node),
 		failedAddresses: make(map[string]time.Time),
 		stopChan:        make(chan struct{}),
-		rateLimiter:     make(chan struct{}, 20),
+		rateLimiter:     make(chan struct{}, 50),
 	}
 }
 
@@ -1272,7 +1272,7 @@ func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
 	
 	count := 0
 	for _, sp := range scoredPods {
-		if count >= 10 {
+		if count >= 30 {
 			break
 		}
 
@@ -1354,8 +1354,8 @@ func (nd *NodeDiscovery) discoverPeers() {
 		}
 	}
 	
-	if len(onlineNodes) > 10 {
-		onlineNodes = onlineNodes[:10]
+	if len(onlineNodes) > 30 {
+		onlineNodes = onlineNodes[:30]
 	}
 	
 	for _, node := range onlineNodes {
