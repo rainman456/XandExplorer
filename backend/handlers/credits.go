@@ -1,7 +1,4 @@
-// ============================================
-// FILE: backend/handlers/credits.go
-// REPLACE the entire file
-// ============================================
+
 package handlers
 
 import (
