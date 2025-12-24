@@ -25,6 +25,7 @@ const (
 	CollectionNodeSnapshots    = "node_snapshots"
 	CollectionAlertHistory     = "alert_history"
 	CollectionNodeRegistry     = "node_registry" // Track when nodes first appeared
+	CollectionAlerts           = "alerts" 
 )
 
 func NewMongoDBService(cfg *config.Config) (*MongoDBService, error) {
@@ -711,4 +712,71 @@ func (m *MongoDBService) GetInactiveNodes(ctx context.Context, inactiveDays int)
 	}
 
 	return results, nil
+}
+
+
+
+func (m *MongoDBService) InsertAlert(ctx context.Context, alert *models.Alert) error {
+	if !m.enabled {
+		return nil
+	}
+	_, err := m.db.Collection(CollectionAlerts).InsertOne(ctx, alert)
+	return err
+}
+
+func (m *MongoDBService) UpdateAlert(ctx context.Context, alert *models.Alert) error {
+	if !m.enabled {
+		return nil
+	}
+	
+	filter := bson.M{"id": alert.ID}
+	update := bson.M{"$set": alert}
+	
+	_, err := m.db.Collection(CollectionAlerts).UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (m *MongoDBService) DeleteAlert(ctx context.Context, alertID string) error {
+	if !m.enabled {
+		return nil
+	}
+	
+	filter := bson.M{"id": alertID}
+	_, err := m.db.Collection(CollectionAlerts).DeleteOne(ctx, filter)
+	return err
+}
+
+func (m *MongoDBService) GetAlert(ctx context.Context, alertID string) (*models.Alert, error) {
+	if !m.enabled {
+		return nil, fmt.Errorf("MongoDB not enabled")
+	}
+	
+	var alert models.Alert
+	filter := bson.M{"id": alertID}
+	
+	err := m.db.Collection(CollectionAlerts).FindOne(ctx, filter).Decode(&alert)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &alert, nil
+}
+
+func (m *MongoDBService) GetAllAlerts(ctx context.Context) ([]*models.Alert, error) {
+	if !m.enabled {
+		return nil, fmt.Errorf("MongoDB not enabled")
+	}
+	
+	cursor, err := m.db.Collection(CollectionAlerts).Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	
+	var alerts []*models.Alert
+	if err := cursor.All(ctx, &alerts); err != nil {
+		return nil, err
+	}
+	
+	return alerts, nil
 }
