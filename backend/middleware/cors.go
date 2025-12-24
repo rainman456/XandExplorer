@@ -8,7 +8,7 @@ import (
 func CORSMiddleware(allowedOrigins []string) echo.MiddlewareFunc {
 	return middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: allowedOrigins,
-		AllowMethods: []string{echo.GET, echo.POST, echo.OPTIONS},
+		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
 		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAuthorization},
 		MaxAge:       3600, // 1 hour
 	})
