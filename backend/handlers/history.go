@@ -56,10 +56,26 @@ func (hh *HistoryHandlers) GetNodeHistory(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, snapshots)
 }
-
 // GetCapacityForecast godoc
+// @Summary Get storage capacity forecast
+// @Description Predicts when network storage will reach capacity based on historical growth
+// @Tags analytics
+// @Produce json
+// @Success 200 {object} models.CapacityForecast
+// @Failure 500 {object} ErrorResponse
+// @Router /api/forecast [get]
 func (hh *HistoryHandlers) GetCapacityForecast(c echo.Context) error {
 	forecast := hh.historyService.GetCapacityForecast()
+	
+	// Check if we have valid forecast data
+	if forecast.CurrentCapacityPB == 0 {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"error":   "Insufficient data for forecast",
+			"message": "Need at least 2 data points to calculate growth rate",
+			"forecast": forecast,
+		})
+	}
+	
 	return c.JSON(http.StatusOK, forecast)
 }
 
