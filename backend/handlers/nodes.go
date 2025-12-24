@@ -82,11 +82,34 @@ func (h *Handler) GetNodes(c echo.Context) error {
 		}
 	}
 
+		includeOffline := true
+	if c.QueryParam("include_offline") == "false" {
+		includeOffline = false
+	}
+
 	// Apply status filter
+	// if statusFilter != "" {
+	// 	filteredNodes := make([]*models.Node, 0)
+	// 	for _, node := range completeNodes {
+	// 		if node.Status == statusFilter {
+	// 			filteredNodes = append(filteredNodes, node)
+	// 		}
+	// 	}
+	// 	completeNodes = filteredNodes
+	// }
 	if statusFilter != "" {
 		filteredNodes := make([]*models.Node, 0)
 		for _, node := range completeNodes {
 			if node.Status == statusFilter {
+				filteredNodes = append(filteredNodes, node)
+			}
+		}
+		completeNodes = filteredNodes
+	} else if !includeOffline {
+		// If not showing offline and no specific status filter, exclude offline nodes
+		filteredNodes := make([]*models.Node, 0)
+		for _, node := range completeNodes {
+			if node.Status != "offline" {
 				filteredNodes = append(filteredNodes, node)
 			}
 		}

@@ -1099,3 +1099,43 @@ func (cs *CacheService) GetCacheStats() map[string]interface{} {
 	
 	return stats
 }
+
+
+
+
+
+func (cs *CacheService) RefreshWithBatch() {
+	start := time.Now()
+	
+	// Get aggregated stats
+	stats := cs.aggregator.Aggregate()
+	nodes := cs.aggregator.discovery.GetNodes()
+
+	// Batch cache updates
+	updates := []struct {
+		key  string
+		data interface{}
+		ttl  time.Duration
+	}{
+		{"stats", stats, time.Duration(cs.cfg.Cache.TTL) * time.Second},
+		{"nodes", nodes, time.Duration(cs.cfg.Cache.TTL) * time.Second},
+	}
+
+	// Execute batch
+	for _, update := range updates {
+		cs.Set(update.key, update.data, update.ttl)
+	}
+
+	// Update individual nodes (limit to avoid overwhelming cache)
+	maxIndividualNodes := 100
+	for i, n := range nodes {
+		if i >= maxIndividualNodes {
+			break
+		}
+		cs.Set("node:"+n.ID, n, 60*time.Second)
+	}
+
+	elapsed := time.Since(start)
+	log.Printf("Cache refreshed (%s): %d nodes | Mode: %s", 
+		elapsed, len(nodes), cs.getMode())
+}

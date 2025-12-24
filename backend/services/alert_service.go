@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,14 +18,17 @@ type AlertService struct {
 	history     []*models.AlertHistory
 	alertsMutex sync.RWMutex
 	cache       *CacheService
+	mongo       *MongoDBService  // ADD THIS
+
 	stopChan    chan struct{}
 }
 
-func NewAlertService(cache *CacheService) *AlertService {
+func NewAlertService(cache *CacheService, mongo *MongoDBService) *AlertService {
 	return &AlertService{
 		alerts:   make(map[string]*models.Alert),
 		history:  make([]*models.AlertHistory, 0),
 		cache:    cache,
+		mongo:    mongo,
 		stopChan: make(chan struct{}),
 	}
 }
@@ -51,6 +55,21 @@ func (as *AlertService) Stop() {
 }
 
 // CreateAlert adds a new alert
+// func (as *AlertService) CreateAlert(alert *models.Alert) error {
+// 	if alert.ID == "" {
+// 		alert.ID = fmt.Sprintf("alert_%d", time.Now().UnixNano())
+// 	}
+// 	alert.CreatedAt = time.Now()
+// 	alert.UpdatedAt = time.Now()
+
+// 	as.alertsMutex.Lock()
+// 	as.alerts[alert.ID] = alert
+// 	as.alertsMutex.Unlock()
+
+// 	return nil
+// }
+
+
 func (as *AlertService) CreateAlert(alert *models.Alert) error {
 	if alert.ID == "" {
 		alert.ID = fmt.Sprintf("alert_%d", time.Now().UnixNano())
@@ -61,6 +80,17 @@ func (as *AlertService) CreateAlert(alert *models.Alert) error {
 	as.alertsMutex.Lock()
 	as.alerts[alert.ID] = alert
 	as.alertsMutex.Unlock()
+
+	// ADD: Persist to MongoDB
+	if as.mongo != nil && as.mongo.enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
+		if err := as.mongo.InsertAlert(ctx, alert); err != nil {
+			log.Printf("Failed to persist alert to MongoDB: %v", err)
+			// Don't fail the operation, alert is still in memory
+		}
+	}
 
 	return nil
 }
@@ -86,6 +116,21 @@ func (as *AlertService) ListAlerts() []*models.Alert {
 }
 
 // UpdateAlert modifies an existing alert
+// func (as *AlertService) UpdateAlert(id string, updated *models.Alert) error {
+// 	as.alertsMutex.Lock()
+// 	defer as.alertsMutex.Unlock()
+	
+// 	if _, exists := as.alerts[id]; !exists {
+// 		return fmt.Errorf("alert not found")
+// 	}
+	
+// 	updated.ID = id
+// 	updated.UpdatedAt = time.Now()
+// 	as.alerts[id] = updated
+// 	return nil
+// }
+
+
 func (as *AlertService) UpdateAlert(id string, updated *models.Alert) error {
 	as.alertsMutex.Lock()
 	defer as.alertsMutex.Unlock()
@@ -97,10 +142,35 @@ func (as *AlertService) UpdateAlert(id string, updated *models.Alert) error {
 	updated.ID = id
 	updated.UpdatedAt = time.Now()
 	as.alerts[id] = updated
+	
+	// ADD: Update in MongoDB
+	if as.mongo != nil && as.mongo.enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
+		if err := as.mongo.UpdateAlert(ctx, updated); err != nil {
+			log.Printf("Failed to update alert in MongoDB: %v", err)
+		}
+	}
+	
 	return nil
 }
 
 // DeleteAlert removes an alert
+// func (as *AlertService) DeleteAlert(id string) error {
+// 	as.alertsMutex.Lock()
+// 	defer as.alertsMutex.Unlock()
+	
+// 	if _, exists := as.alerts[id]; !exists {
+// 		return fmt.Errorf("alert not found")
+// 	}
+	
+// 	delete(as.alerts, id)
+// 	return nil
+// }
+
+
+
 func (as *AlertService) DeleteAlert(id string) error {
 	as.alertsMutex.Lock()
 	defer as.alertsMutex.Unlock()
@@ -110,6 +180,17 @@ func (as *AlertService) DeleteAlert(id string) error {
 	}
 	
 	delete(as.alerts, id)
+	
+	// ADD: Delete from MongoDB
+	if as.mongo != nil && as.mongo.enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
+		if err := as.mongo.DeleteAlert(ctx, id); err != nil {
+			log.Printf("Failed to delete alert from MongoDB: %v", err)
+		}
+	}
+	
 	return nil
 }
 
@@ -290,7 +371,40 @@ func (as *AlertService) evaluateLatencySpike(alert *models.Alert, context map[st
 	return false, context
 }
 
-func (as *AlertService) fireAlert(alert *models.Alert, context map[string]interface{}) {
+// func (as *AlertService) fireAlert(alert *models.Alert, context map[string]interface{}) {
+// 	log.Printf("Alert triggered: %s", alert.Name)
+
+// 	// Update last fired
+// 	as.alertsMutex.Lock()
+// 	alert.LastFired = time.Now()
+// 	as.alertsMutex.Unlock()
+
+// 	// Execute actions
+// 	for _, action := range alert.Actions {
+// 		success := as.executeAction(action, alert, context)
+		
+// 		// Record history
+// 		history := &models.AlertHistory{
+// 			ID:          fmt.Sprintf("hist_%d", time.Now().UnixNano()),
+// 			AlertID:     alert.ID,
+// 			AlertName:   alert.Name,
+// 			Timestamp:   time.Now(),
+// 			Condition:   alert.RuleType,
+// 			TriggeredBy: context,
+// 			Success:     success,
+// 		}
+		
+// 		as.alertsMutex.Lock()
+// 		as.history = append(as.history, history)
+// 		// Keep only last 1000 history items
+// 		if len(as.history) > 1000 {
+// 			as.history = as.history[len(as.history)-1000:]
+// 		}
+// 		as.alertsMutex.Unlock()
+// 	}
+// }
+
+func (as *AlertService) fireAlert(alert *models.Alert, alertContext map[string]interface{}) {
 	log.Printf("Alert triggered: %s", alert.Name)
 
 	// Update last fired
@@ -300,7 +414,7 @@ func (as *AlertService) fireAlert(alert *models.Alert, context map[string]interf
 
 	// Execute actions
 	for _, action := range alert.Actions {
-		success := as.executeAction(action, alert, context)
+		success := as.executeAction(action, alert, alertContext)
 		
 		// Record history
 		history := &models.AlertHistory{
@@ -309,24 +423,35 @@ func (as *AlertService) fireAlert(alert *models.Alert, context map[string]interf
 			AlertName:   alert.Name,
 			Timestamp:   time.Now(),
 			Condition:   alert.RuleType,
-			TriggeredBy: context,
+			TriggeredBy: alertContext,
 			Success:     success,
 		}
 		
 		as.alertsMutex.Lock()
 		as.history = append(as.history, history)
-		// Keep only last 1000 history items
+		// Keep only last 1000 history items in memory
 		if len(as.history) > 1000 {
 			as.history = as.history[len(as.history)-1000:]
 		}
 		as.alertsMutex.Unlock()
+		
+		// ADD: Persist to MongoDB
+		if as.mongo != nil && as.mongo.enabled {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			
+			if err := as.mongo.InsertAlertHistory(ctx, history); err != nil {
+				log.Printf("Failed to persist alert history to MongoDB: %v", err)
+			}
+		}
 	}
 }
 
-func (as *AlertService) executeAction(action models.AlertAction, alert *models.Alert, context map[string]interface{}) bool {
+
+func (as *AlertService) executeAction(action models.AlertAction, alert *models.Alert, alertContext map[string]interface{}) bool {
 	switch action.Type {
 	case "webhook", "discord":
-		return as.sendWebhook(action, alert, context)
+		return as.sendWebhook(action, alert, alertContext)
 	case "email":
 		log.Printf("Email simulation: Alert '%s' triggered", alert.Name)
 		return true
@@ -335,7 +460,7 @@ func (as *AlertService) executeAction(action models.AlertAction, alert *models.A
 	}
 }
 
-func (as *AlertService) sendWebhook(action models.AlertAction, alert *models.Alert, context map[string]interface{}) bool {
+func (as *AlertService) sendWebhook(action models.AlertAction, alert *models.Alert, alertContext map[string]interface{}) bool {
 	url, _ := action.Config["url"].(string)
 	if url == "" {
 		return false
@@ -347,7 +472,7 @@ func (as *AlertService) sendWebhook(action models.AlertAction, alert *models.Ale
 		"description": alert.Description,
 		"rule_type":  alert.RuleType,
 		"timestamp":  time.Now(),
-		"context":    context,
+		"context":    alertContext,
 	}
 
 	// Discord-specific formatting
@@ -360,7 +485,7 @@ func (as *AlertService) sendWebhook(action models.AlertAction, alert *models.Ale
 					"color":       15158332, // Red
 					"fields": []map[string]interface{}{
 						{"name": "Rule Type", "value": alert.RuleType, "inline": true},
-						{"name": "Context", "value": fmt.Sprintf("%v", context), "inline": false},
+						{"name": "Context", "value": fmt.Sprintf("%v", alertContext), "inline": false},
 					},
 					"timestamp": time.Now().Format(time.RFC3339),
 				},
@@ -379,4 +504,27 @@ func (as *AlertService) sendWebhook(action models.AlertAction, alert *models.Ale
 	defer resp.Body.Close()
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func (as *AlertService) LoadAlertsFromDB() error {
+	if as.mongo == nil || !as.mongo.enabled {
+		return nil
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	alerts, err := as.mongo.GetAllAlerts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load alerts from MongoDB: %w", err)
+	}
+	
+	as.alertsMutex.Lock()
+	for _, alert := range alerts {
+		as.alerts[alert.ID] = alert
+	}
+	as.alertsMutex.Unlock()
+	
+	log.Printf("Loaded %d alerts from MongoDB", len(alerts))
+	return nil
 }

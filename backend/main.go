@@ -301,7 +301,18 @@ func main() {
 	cache := services.NewCacheService(cfg, aggregator)
 
 	// Feature Services
-	alertService := services.NewAlertService(cache)
+	//alertService := services.NewAlertService(cache)
+
+	alertService := services.NewAlertService(cache, mongoService)
+
+// ADD after alertService.Start() (around line 90):
+
+	// Load alerts from MongoDB
+	if err := alertService.LoadAlertsFromDB(); err != nil {
+		log.Printf("Warning: Failed to load alerts from MongoDB: %v", err)
+	} else {
+		log.Println("✓ Alerts loaded from MongoDB")
+	}
 	historyService := services.NewHistoryService(cache, mongoService)
 	calculatorService := services.NewCalculatorService()
 	topologyService := services.NewTopologyService(cache, discovery)
@@ -320,7 +331,7 @@ func main() {
 	
 	// Wait for initial discovery
 	log.Println("⏳ Waiting for initial node discovery...")
-	time.Sleep(15 * time.Second)
+	time.Sleep(30 * time.Second)
 	
 	// Start Cache Warmer (will use Redis or fall back to in-memory)
 	cache.StartCacheWarmer()
