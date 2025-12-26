@@ -75,11 +75,7 @@ func LoadConfig() (*Config, error) {
 		Server: ServerConfig{
 			Port: 8080,
 			Host: "0.0.0.0",
-			AllowedOrigins: []string{
-				"http://localhost:5173",
-				"http://localhost:5174",
-				"https://your-deployed-frontend.vercel.app",
-			},
+			AllowedOrigins: []string{"*"},
 			SeedNodes: []string{},
 		},
 		PRPC: PRPCConfig{
