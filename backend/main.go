@@ -418,6 +418,9 @@
 // 			return next(c)
 // 		}
 // 	})
+// // 	e.GET("/kaithhealth", func(c echo.Context) error {
+// // 	return c.NoContent(http.StatusOK)
+// // })
 
 // 	// 5. Handlers
 // 	h := handlers.NewHandler(cfg, cache, discovery, prpc)
@@ -534,8 +537,6 @@
 
 
 
-
-
 package main
 
 import (
@@ -558,59 +559,45 @@ import (
 )
 
 func main() {
-	// =====================================================
-	// 1. Load Configuration
-	// =====================================================
+	// 1. Config
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	log.Println("=== Configuration Loaded ===")
-	log.Printf("Port: %d", cfg.Server.Port)
+	log.Println("=== Configuration ===")
+	log.Printf("Server: %s:%d", cfg.Server.Host, cfg.Server.Port)
+	log.Printf("Redis: %s", cfg.Redis.Address)
+	log.Printf("MongoDB: %s", cfg.MongoDB.Database)
 
-	// =====================================================
-	// 2. Core Dependencies (non-blocking init)
-	// =====================================================
-
-	// GeoIP
+	// 2. Core Services
 	geo, err := utils.NewGeoResolver(cfg.GeoIP.DBPath)
 	if err != nil {
-		log.Printf("⚠️ GeoIP disabled: %v", err)
+		log.Printf("⚠️  GeoIP DB not found at %s: %v", cfg.GeoIP.DBPath, err)
 	}
-	if geo != nil {
-		defer geo.Close()
-	}
+	defer geo.Close()
 
-	// MongoDB
 	mongoService, err := services.NewMongoDBService(cfg)
 	if err != nil {
-		log.Printf("⚠️ MongoDB disabled: %v", err)
+		log.Printf("⚠️  MongoDB connection failed: %v", err)
+		log.Println("Analytics features will be disabled")
 		mongoService = nil
 	}
 	if mongoService != nil {
 		defer mongoService.Close()
 	}
 
-	// Discord Bot
-	var discordBot *services.DiscordBotService
-	if token := os.Getenv("DISCORD_BOT_TOKEN"); token != "" {
-		discordBot, err = services.NewDiscordBotService(
-			token,
-			os.Getenv("DISCORD_CHANNEL_ID"),
-		)
-		if err != nil {
-			log.Printf("⚠️ Discord bot disabled: %v", err)
-			discordBot = nil
-		} else {
-			defer discordBot.Close()
-			log.Println("✓ Discord Bot connected")
-		}
+	discordToken := os.Getenv("DISCORD_BOT_TOKEN")
+	discordChannelID := os.Getenv("DISCORD_CHANNEL_ID")
+	discordBot, err := services.NewDiscordBotService(discordToken, discordChannelID)
+	if err != nil {
+		log.Printf("⚠️  Discord bot initialization failed: %v", err)
+		discordBot = nil
+	} else if discordBot != nil {
+		defer discordBot.Close()
+		log.Println("✓ Discord Bot connected")
 	}
 
-	// =====================================================
-	// 3. Core Services (constructed, NOT started yet)
-	// =====================================================
 	prpc := services.NewPRPCClient(cfg)
 	creditsService := services.NewCreditsService()
 	discovery := services.NewNodeDiscovery(cfg, prpc, geo, creditsService)
@@ -618,19 +605,28 @@ func main() {
 	cache := services.NewCacheService(cfg, aggregator)
 
 	alertService := services.NewAlertService(cache, mongoService, discordBot)
+
+	if err := alertService.LoadAlertsFromDB(); err != nil {
+		log.Printf("Warning: Failed to load alerts from MongoDB: %v", err)
+	} else {
+		log.Println("✓ Alerts loaded from MongoDB")
+	}
+
 	historyService := services.NewHistoryService(cache, mongoService)
 	calculatorService := services.NewCalculatorService()
 	topologyService := services.NewTopologyService(cache, discovery)
 	comparisonService := services.NewComparisonService(cache)
 
-	// Load persisted alerts (non-fatal)
-	if err := alertService.LoadAlertsFromDB(); err != nil {
-		log.Printf("⚠️ Failed to load alerts: %v", err)
-	}
+	// 3. Start background services (NON-BLOCKING)
+	log.Println("=== Starting Services ===")
 
-	// =====================================================
-	// 4. HTTP Server (STARTS IMMEDIATELY)
-	// =====================================================
+	creditsService.Start()
+	log.Println("✓ Credits Service started")
+
+	discovery.Start()
+	log.Println("✓ Node Discovery started")
+
+	// 4. Web Server (START IMMEDIATELY FOR LEAPCELL)
 	e := echo.New()
 	e.HideBanner = true
 
@@ -648,16 +644,13 @@ func main() {
 		}
 	})
 
-	// Health (critical for Leapcell)
-	e.GET("/health", func(c echo.Context) error {
-		return c.String(http.StatusOK, "ok")
+	// 🔑 REQUIRED BY LEAPCELL
+	e.GET("/kaithhealth", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
 	})
 
-	// =====================================================
-	// 5. Handlers & Routes
-	// =====================================================
+	// Handlers
 	h := handlers.NewHandler(cfg, cache, discovery, prpc)
-
 	alertHandlers := handlers.NewAlertHandlers(alertService)
 	historyHandlers := handlers.NewHistoryHandlers(historyService)
 	calculatorHandlers := handlers.NewCalculatorHandlers(calculatorService)
@@ -667,21 +660,17 @@ func main() {
 	analyticsHandlers := handlers.NewAnalyticsHandlers(mongoService)
 	cacheHandlers := handlers.NewCacheHandlers(cache)
 
-	api := e.Group("/api")
+	// Routes
+	e.GET("/health", h.GetHealth)
+	e.GET("/cache/status", cacheHandlers.GetCacheStatus)
+	e.POST("/cache/clear", cacheHandlers.ClearCache)
 
+	api := e.Group("/api")
 	api.GET("/status", h.GetStatus)
 	api.GET("/nodes", h.GetNodes)
 	api.GET("/nodes/:id", h.GetNode)
 	api.GET("/stats", h.GetStats)
 	api.POST("/rpc", h.ProxyRPC)
-
-	api.GET("/comparison", comparisonHandlers.GetCrossChainComparison)
-
-	api.GET("/forecast", historyHandlers.GetCapacityForecast)
-
-	cacheAPI := api.Group("/cache")
-	cacheAPI.GET("/status", cacheHandlers.GetCacheStatus)
-	cacheAPI.POST("/clear", cacheHandlers.ClearCache)
 
 	alerts := api.Group("/alerts")
 	alerts.POST("", alertHandlers.CreateAlert)
@@ -697,10 +686,13 @@ func main() {
 	history.GET("/nodes/:id", historyHandlers.GetNodeHistory)
 	history.GET("/latency-distribution", historyHandlers.GetLatencyDistribution)
 
+	api.GET("/forecast", historyHandlers.GetCapacityForecast)
+
 	calculator := api.Group("/calculator")
 	calculator.GET("/costs", calculatorHandlers.CompareCosts)
 	calculator.GET("/roi", calculatorHandlers.EstimateROI)
 	calculator.POST("/redundancy", calculatorHandlers.SimulateRedundancy)
+	calculator.GET("/redundancy", calculatorHandlers.SimulateRedundancy)
 
 	credits := api.Group("/credits")
 	credits.GET("", creditsHandlers.GetAllCredits)
@@ -721,38 +713,42 @@ func main() {
 	topology.GET("", topologyHandlers.GetTopology)
 	topology.GET("/regions", topologyHandlers.GetRegionalClusters)
 
-	// =====================================================
-	// 6. Start Background Services (ASYNC)
-	// =====================================================
-	log.Println("=== Starting background services ===")
+	api.GET("/comparison", comparisonHandlers.GetCrossChainComparison)
 
-	go creditsService.Start()
-	go discovery.Start()
-	go cache.StartCacheWarmer()
-	go historyService.Start()
-	go alertService.Start()
-
-	// =====================================================
-	// 7. Start HTTP Server (PaaS-safe)
-	// =====================================================
-	serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
+	// 🔑 Bind to all interfaces (Leapcell)
+	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Server.Port)
 
 	go func() {
 		log.Printf("🚀 Server listening on %s", serverAddr)
 		if err := e.Start(serverAddr); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+			log.Fatalf("shutting down the server: %v", err)
 		}
 	}()
 
-	// =====================================================
-	// 8. Graceful Shutdown
-	// =====================================================
+	// 5. Delayed warmup (UNCHANGED LOGIC, NON-BLOCKING)
+	go func() {
+		log.Println("⏳ Waiting for initial node discovery...")
+		time.Sleep(30 * time.Second)
+
+		cache.StartCacheWarmer()
+		log.Println("✓ Cache Service started")
+		log.Printf("   Mode: %s", cache.GetCacheMode())
+
+		historyService.Start()
+		log.Println("✓ History Service started")
+
+		alertService.Start()
+		log.Println("✓ Alert Service started")
+
+		log.Println("=== All Services Running ===")
+	}()
+
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	log.Println("⏳ Shutdown initiated...")
-
+	log.Println("⏳ Graceful shutdown initiated...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -763,7 +759,7 @@ func main() {
 	creditsService.Stop()
 
 	if err := e.Shutdown(ctx); err != nil {
-		log.Printf("Shutdown error: %v", err)
+		e.Logger.Fatal(err)
 	}
 
 	log.Println("✓ Server exited cleanly")
