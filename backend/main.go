@@ -285,6 +285,39 @@ func main() {
 		defer mongoService.Close()
 	}
 
+
+
+
+
+
+		discordToken := os.Getenv("DISCORD_BOT_TOKEN")
+	discordChannelID := os.Getenv("DISCORD_CHANNEL_ID")
+	discordBot, err := services.NewDiscordBotService(discordToken, discordChannelID)
+	if err != nil {
+		log.Printf("⚠️  Discord bot initialization failed: %v", err)
+		log.Println("Discord notifications will be disabled")
+		discordBot = nil
+	} else if discordBot != nil {
+		defer discordBot.Close()
+		log.Println("✓ Discord Bot connected")
+	}
+
+	// Telegram Bot Service (PLACEHOLDER - commented out)
+	// telegramToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	// telegramChatID := os.Getenv("TELEGRAM_CHAT_ID")
+	// var telegramChatIDInt int64
+	// if telegramChatID != "" {
+	// 	telegramChatIDInt, _ = strconv.ParseInt(telegramChatID, 10, 64)
+	// }
+	// telegramBot, err := services.NewTelegramBotService(telegramToken, telegramChatIDInt)
+	// if err != nil {
+	// 	log.Printf("⚠️  Telegram bot initialization failed: %v", err)
+	// 	log.Println("Telegram notifications will be disabled")
+	// 	telegramBot = nil
+	// } else if telegramBot != nil {
+	// 	log.Println("✓ Telegram Bot connected")
+	// }
+
 	// PRPC Client
 	prpc := services.NewPRPCClient(cfg)
 
@@ -303,7 +336,9 @@ func main() {
 	// Feature Services
 	//alertService := services.NewAlertService(cache)
 
-	alertService := services.NewAlertService(cache, mongoService)
+	//alertService := services.NewAlertService(cache, mongoService)
+		alertService := services.NewAlertService(cache, mongoService, discordBot) // UPDATED
+
 
 // ADD after alertService.Start() (around line 90):
 

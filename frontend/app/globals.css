@@ -1,0 +1,234 @@
+@import "tailwindcss";
+
+@import "tailwindcss";
+
+:root {
+  /* LIGHT MODE SYSTEM */
+  --bg-root: #FAFAFC;
+  --bg-surface: #FFFFFF;
+  --bg-elevated: #F2F3F7;
+
+  --text-primary: #111118;
+  --text-secondary: #4A4A5A;
+  --text-muted: #7A7A8A;
+
+  --border-subtle: #E4E5EB;
+  --border-strong: #D2D4DC;
+
+  --color-primary: #662459;
+  --color-primary-soft: rgba(102, 36, 89, 0.12);
+  --color-primary-hover: #501d46;
+
+  --color-secondary: #008E7C;
+  --color-secondary-soft: rgba(0, 142, 124, 0.12);
+
+  --color-accent: #FE8300;
+  --color-accent-soft: rgba(254, 131, 0, 0.15);
+
+  --overlay-hover: rgba(0, 0, 0, 0.04);
+  --overlay-active: rgba(0, 0, 0, 0.08);
+
+  --gradient-primary: linear-gradient(135deg, #662459 0%, #933481 100%);
+  --gradient-accent: linear-gradient(135deg, #FE8300 0%, #FEA700 100%);
+  --gradient-tech: linear-gradient(135deg, #008E7C 0%, #00B49E 100%);
+
+  --focus-ring: #933481;
+}
+
+@theme inline {
+  --color-background: var(--bg-root);
+  --color-foreground: var(--text-primary);
+  --font-sans: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --color-root: var(--bg-root);
+  --color-surface: var(--bg-surface);
+  --color-elevated: var(--bg-elevated);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+
+  --color-primary-DEFAULT: var(--color-primary);
+  --color-primary-soft: var(--color-primary-soft);
+  --color-primary-hover: var(--color-primary-hover);
+
+  --color-secondary-DEFAULT: var(--color-secondary);
+  --color-secondary-soft: var(--color-secondary-soft);
+
+  --color-accent-DEFAULT: var(--color-accent);
+  --color-accent-soft: var(--color-accent-soft);
+
+  --color-overlay-hover: var(--overlay-hover);
+  --color-overlay-active: var(--overlay-active);
+
+  --image-gradient-primary: var(--gradient-primary);
+  --image-gradient-accent: var(--gradient-accent);
+  --image-gradient-tech: var(--gradient-tech);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* DARK MODE SYSTEM */
+    --bg-root: #050507;
+    --bg-surface: #0C0D12;
+    --bg-elevated: #12141B;
+
+    --text-primary: #EDEDED;
+    --text-secondary: #A6A6B2;
+    --text-muted: #6E6E7E;
+
+    --border-subtle: #1E1F2A;
+    --border-strong: #2A2C3A;
+
+    --color-primary: #933481;
+    --color-primary-soft: rgba(147, 52, 129, 0.15);
+    --color-primary-hover: #7A2A6B;
+    /* Kept existing derived hover or user didn't specify hover hex, usually safe to keep or derivative */
+
+    --color-secondary: #008E7C;
+    --color-secondary-soft: rgba(0, 142, 124, 0.15);
+
+    --color-accent: #FE8300;
+    --color-accent-soft: #FEA700;
+
+    --overlay-hover: rgba(255, 255, 255, 0.04);
+    --overlay-active: rgba(255, 255, 255, 0.08);
+
+    --gradient-primary: linear-gradient(135deg, #662459 0%, #933481 100%);
+    --gradient-accent: linear-gradient(135deg, #FE8300 0%, #FEA700 100%);
+    --gradient-tech: linear-gradient(135deg, #008E7C 0%, #00B49E 100%);
+
+    --focus-ring: #FEA700;
+  }
+}
+
+/* Force dark class application if manual toggling wraps in .dark */
+.dark {
+  /* DARK MODE SYSTEM overrides if class applied manually */
+  --bg-root: #050507;
+  --bg-surface: #0C0D12;
+  --bg-elevated: #12141B;
+
+  --text-primary: #EDEDED;
+  --text-secondary: #A6A6B2;
+  --text-muted: #6E6E7E;
+
+  --border-subtle: #1E1F2A;
+  --border-strong: #2A2C3A;
+
+  --color-primary: #933481;
+  --color-primary-soft: rgba(147, 52, 129, 0.15);
+  /* User didn't explicitly specify hover for primary button, but implied brand color. Keeping existing or standard derivative */
+  --color-primary-hover: #7A2A6B;
+
+  --color-secondary: #008E7C;
+  --color-secondary-soft: rgba(0, 142, 124, 0.15);
+
+  --color-accent: #FE8300;
+  --color-accent-soft: #FEA700;
+
+  --overlay-hover: rgba(255, 255, 255, 0.04);
+  --overlay-active: rgba(255, 255, 255, 0.08);
+
+  --gradient-primary: linear-gradient(135deg, #662459 0%, #933481 100%);
+  --gradient-accent: linear-gradient(135deg, #FE8300 0%, #FEA700 100%);
+  --gradient-tech: linear-gradient(135deg, #008E7C 0%, #00B49E 100%);
+
+  --focus-ring: #FEA700;
+}
+
+body {
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-root);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+
+/* Glass utilities */
+.glass-panel {
+  background: rgba(12, 13, 18, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--overlay-hover);
+}
+
+/* Button Utilities - Ensuring proper contrast in light mode */
+.btn-primary {
+  background: var(--gradient-primary);
+  color: white;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 36, 89, 0.3);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: var(--overlay-hover);
+  border-color: var(--color-primary);
+}
+
+.btn-accent {
+  background: var(--gradient-accent);
+  color: white;
+  transition: all 0.2s ease;
+}
+
+.btn-accent:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(254, 131, 0, 0.3);
+}
+
+/* Ensure bg-primary has proper contrast in light mode */
+.bg-primary {
+  background-color: var(--color-primary) !important;
+}
+
+/* Add gradient background utility */
+.bg-gradient-primary {
+  background: var(--gradient-primary);
+}
+
+.bg-gradient-accent {
+  background: var(--gradient-accent);
+}
+
+.bg-gradient-tech {
+  background: var(--gradient-tech);
+}
