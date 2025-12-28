@@ -94,11 +94,121 @@ func NewDataAggregator(discovery *NodeDiscovery) *DataAggregator {
 // }
 
 
+// func (da *DataAggregator) Aggregate() models.NetworkStats {
+// 	nodes := da.discovery.GetNodes()
+
+// 	aggr := models.NetworkStats{
+// 		TotalNodes:  len(nodes), // Now includes ALL nodes (online, offline, etc.)
+// 		LastUpdated: time.Now(),
+// 	}
+
+// 	if len(nodes) == 0 {
+// 		log.Println("No nodes available for aggregation")
+// 		return aggr
+// 	}
+
+// 	var sumUptime float64
+// 	var sumPerformance float64
+// 	var countPerformance int
+// 	var totalCredits int64
+// 	var nodesWithCredits int
+
+// 	// Process ALL nodes, regardless of status
+// 	for _, node := range nodes {
+// 		// Always determine status and calculate scores for ALL nodes
+// 		utils.DetermineStatus(node)
+// 		utils.CalculateScore(node)
+
+// 		// Count by status
+// 		switch node.Status {
+// 		case "online":
+// 			aggr.OnlineNodes++
+// 		case "warning":
+// 			aggr.WarningNodes++
+// 		case "offline":
+// 			aggr.OfflineNodes++
+// 		}
+
+// 		// Aggregate storage from ALL nodes
+// 		aggr.TotalStorage += float64(node.StorageCapacity) / 1e15
+// 		aggr.UsedStorage += float64(node.StorageUsed) / 1e15
+// 		aggr.TotalStake += int64(node.TotalStake)
+
+// 		// Aggregate metrics from ALL nodes
+// 		sumUptime += node.UptimeScore
+// 		if node.PerformanceScore > 0 {
+// 			sumPerformance += node.PerformanceScore
+// 			countPerformance++
+// 		}
+		
+// 		// Track credits from ALL nodes
+// 		if node.Credits > 0 {
+// 			totalCredits += node.Credits
+// 			nodesWithCredits++
+// 		}
+// 	}
+
+// 	// Calculate averages across ALL nodes
+// 	if len(nodes) > 0 {
+// 		aggr.AverageUptime = sumUptime / float64(len(nodes))
+// 	}
+	
+// 	if countPerformance > 0 {
+// 		aggr.AveragePerformance = sumPerformance / float64(countPerformance)
+// 	}
+
+// 	// Calculate network health (online ratio is key factor)
+// 	if len(nodes) > 0 {
+// 		onlineRatio := float64(aggr.OnlineNodes) / float64(aggr.TotalNodes)
+// 		aggr.NetworkHealth = (onlineRatio * 80) + (aggr.AverageUptime * 0.2)
+		
+// 		if aggr.NetworkHealth > 100 {
+// 			aggr.NetworkHealth = 100
+// 		}
+// 	}
+
+// 	avgCredits := int64(0)
+// 	if nodesWithCredits > 0 {
+// 		avgCredits = totalCredits / int64(nodesWithCredits)
+// 	}
+
+// 	log.Printf("Aggregated %d nodes (Online: %d, Warning: %d, Offline: %d). Health: %.2f%%. Storage: %.2f/%.2f PB. Credits: %d nodes, avg %d", 
+// 		len(nodes), aggr.OnlineNodes, aggr.WarningNodes, aggr.OfflineNodes,
+// 		aggr.NetworkHealth, aggr.UsedStorage, aggr.TotalStorage, 
+// 		nodesWithCredits, avgCredits)
+
+// 	return aggr
+// }
+
+// func max(a, b int) int {
+// 	if a > b {
+// 		return a
+// 	}
+// 	return b
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func (da *DataAggregator) Aggregate() models.NetworkStats {
-	nodes := da.discovery.GetNodes()
+	nodes := da.discovery.GetNodes() // Now returns ALL IP addresses
+
+	// Count unique pubkeys
+	uniquePubkeys := make(map[string]bool)
+	var totalCommittedStorage float64
 
 	aggr := models.NetworkStats{
-		TotalNodes:  len(nodes), // Now includes ALL nodes (online, offline, etc.)
+		TotalNodes:  len(nodes), // CORRECT: All IP addresses
 		LastUpdated: time.Now(),
 	}
 
@@ -119,7 +229,13 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 		utils.DetermineStatus(node)
 		utils.CalculateScore(node)
 
-		// Count by status
+		// Track unique pubkeys for pod count
+		if node.Pubkey != "" {
+			uniquePubkeys[node.Pubkey] = true
+			totalCommittedStorage += float64(node.StorageCapacity) // In bytes
+		}
+
+		// Count by status (IP-level counts)
 		switch node.Status {
 		case "online":
 			aggr.OnlineNodes++
@@ -129,9 +245,9 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 			aggr.OfflineNodes++
 		}
 
-		// Aggregate storage from ALL nodes
-		aggr.TotalStorage += float64(node.StorageCapacity) / 1e15
-		aggr.UsedStorage += float64(node.StorageUsed) / 1e15
+		// Aggregate storage from ALL nodes (in BYTES, no conversion)
+		aggr.TotalStorage += float64(node.StorageCapacity)
+		aggr.UsedStorage += float64(node.StorageUsed)
 		aggr.TotalStake += int64(node.TotalStake)
 
 		// Aggregate metrics from ALL nodes
@@ -148,7 +264,17 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 		}
 	}
 
-	// Calculate averages across ALL nodes
+	// Set pod count (unique pubkeys)
+	aggr.TotalPods = len(uniquePubkeys)
+
+	// Calculate average storage committed per pod
+	if aggr.TotalPods > 0 {
+		aggr.AvgStorageCommittedPerPodBytes = totalCommittedStorage / float64(aggr.TotalPods)
+	} else {
+		aggr.AvgStorageCommittedPerPodBytes = 0
+	}
+
+	// Calculate averages across ALL nodes (IP-based)
 	if len(nodes) > 0 {
 		aggr.AverageUptime = sumUptime / float64(len(nodes))
 	}
@@ -172,17 +298,13 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 		avgCredits = totalCredits / int64(nodesWithCredits)
 	}
 
-	log.Printf("Aggregated %d nodes (Online: %d, Warning: %d, Offline: %d). Health: %.2f%%. Storage: %.2f/%.2f PB. Credits: %d nodes, avg %d", 
-		len(nodes), aggr.OnlineNodes, aggr.WarningNodes, aggr.OfflineNodes,
-		aggr.NetworkHealth, aggr.UsedStorage, aggr.TotalStorage, 
+	log.Printf("Aggregated %d nodes (IPs), %d pods (pubkeys). Online: %d, Warning: %d, Offline: %d. Health: %.2f%%. Storage: %.0f/%.0f bytes. Avg storage per pod: %.0f bytes. Credits: %d nodes, avg %d", 
+		aggr.TotalNodes, aggr.TotalPods,
+		aggr.OnlineNodes, aggr.WarningNodes, aggr.OfflineNodes,
+		aggr.NetworkHealth, 
+		aggr.UsedStorage, aggr.TotalStorage,
+		aggr.AvgStorageCommittedPerPodBytes,
 		nodesWithCredits, avgCredits)
 
 	return aggr
 }
-
-// func max(a, b int) int {
-// 	if a > b {
-// 		return a
-// 	}
-// 	return b
-// }

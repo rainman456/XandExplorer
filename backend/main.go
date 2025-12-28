@@ -303,6 +303,19 @@ func main() {
 	}
 
 
+	// Registration Service
+regService, err := services.NewRegistrationService(cfg.Registration.CSVPath)
+if err != nil {
+	log.Printf("⚠️  Registration service failed to initialize: %v", err)
+	log.Println("All nodes will be marked as unregistered")
+	regService, _ = services.NewRegistrationService("") // Create empty service
+}
+if regService != nil {
+	log.Printf("✓ Registration service loaded (%d registered pubkeys)", regService.GetRegisteredCount())
+}
+
+
+
 
 
 
@@ -342,7 +355,7 @@ func main() {
 	creditsService := services.NewCreditsService()
 
 	// Node Discovery
-	discovery := services.NewNodeDiscovery(cfg, prpc, geo, creditsService)
+	discovery := services.NewNodeDiscovery(cfg, prpc, geo, creditsService, regService)
 
 	// Data Aggregator
 	aggregator := services.NewDataAggregator(discovery)

@@ -20,6 +20,12 @@ type Config struct {
 	Redis   RedisConfig   `json:"redis"`   // NEW
 	GeoIP   GeoIPConfig   `json:"geoip"`
 	MongoDB MongoDBConfig `json:"mongodb"`
+	Registration RegistrationConfig `json:"registration"`
+}
+
+// NEW: Registration Configuration
+type RegistrationConfig struct {
+	CSVPath string `json:"csv_path"`
 }
 
 type ServerConfig struct {
@@ -107,6 +113,9 @@ func LoadConfig() (*Config, error) {
 			URI:      "mongodb://localhost:27017",
 			Database: "xandeum_analytics",
 			Enabled:  true,
+		},
+		Registration: RegistrationConfig{
+			CSVPath: "",
 		},
 	}
 
@@ -262,6 +271,11 @@ func loadEnv(cfg *Config) {
 	}
 	if val := os.Getenv("MONGODB_ENABLED"); val != "" {
 		cfg.MongoDB.Enabled = val == "true" || val == "1"
+	}
+
+	// Registration configuration
+	if val := os.Getenv("REGISTRATION_CSV_PATH"); val != "" {
+		cfg.Registration.CSVPath = val
 	}
 }
 
