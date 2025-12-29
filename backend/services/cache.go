@@ -808,30 +808,86 @@ func (cs *CacheService) syncInMemoryToRedis() {
 }
 
 // Refresh fetches fresh data and updates cache
+// func (cs *CacheService) Refresh() {
+// 	start := time.Now()
+	
+// 	// Get aggregated stats
+// 	stats := cs.aggregator.Aggregate()
+
+// 	// Get all nodes
+// 	nodes := cs.aggregator.discovery.GetNodes()
+
+// 	// Update caches with appropriate TTL
+// 	ttl := time.Duration(cs.cfg.Cache.TTL) * time.Second
+
+// 	cs.Set("stats", stats, ttl)
+// 	cs.Set("nodes", nodes, ttl)
+
+// 	// Update individual node caches
+// 	for _, n := range nodes {
+// 		cs.Set("node:"+n.ID, n, 60*time.Second)
+// 	}
+
+// 	elapsed := time.Since(start)
+// 	log.Printf("Cache refreshed (%s): %d online/%d total nodes | Mode: %s", 
+// 		elapsed, stats.OnlineNodes, len(nodes), cs.getMode())
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func (cs *CacheService) Refresh() {
 	start := time.Now()
 	
 	// Get aggregated stats
 	stats := cs.aggregator.Aggregate()
 
-	// Get all nodes
-	nodes := cs.aggregator.discovery.GetNodes()
+	// CRITICAL: Get all nodes (by IP, including duplicates)
+	allNodes := cs.aggregator.discovery.GetAllNodes()
+	
+	// Also get unique nodes (by pubkey) for backward compatibility
+	uniqueNodes := cs.aggregator.discovery.GetNodes()
 
 	// Update caches with appropriate TTL
 	ttl := time.Duration(cs.cfg.Cache.TTL) * time.Second
 
 	cs.Set("stats", stats, ttl)
-	cs.Set("nodes", nodes, ttl)
+	cs.Set("nodes", allNodes, ttl) // Store all nodes (IPs) - THIS MUST BE allNodes
+	cs.Set("nodes:unique", uniqueNodes, ttl) // Store unique nodes (pubkeys)
 
 	// Update individual node caches
-	for _, n := range nodes {
+	for _, n := range uniqueNodes {
 		cs.Set("node:"+n.ID, n, 60*time.Second)
 	}
 
 	elapsed := time.Since(start)
-	log.Printf("Cache refreshed (%s): %d online/%d total nodes | Mode: %s", 
-		elapsed, stats.OnlineNodes, len(nodes), cs.getMode())
+	log.Printf("Cache refreshed (%s): %d online/%d total IPs, %d unique pubkeys | Mode: %s", 
+		elapsed, stats.OnlineNodes, len(allNodes), len(uniqueNodes), cs.getMode())
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ============================================
 // Generic Set/Get with Redis + In-Memory

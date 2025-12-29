@@ -41,6 +41,162 @@ func NewHandler(cfg *config.Config, cache *services.CacheService, discovery *ser
 // @Param order query string false "Sort order (asc, desc) (default: desc)"
 // @Success 200 {object} NodesResponse
 // @Router /api/nodes [get]
+// func (h *Handler) GetNodes(c echo.Context) error {
+// 	// Parse pagination parameters
+// 	page, _ := strconv.Atoi(c.QueryParam("page"))
+// 	if page < 1 {
+// 		page = 1
+// 	}
+
+// 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+// 	if limit < 1 {
+// 		limit = 50
+// 	}
+// 	if limit > 500 {
+// 		limit = 500
+// 	}
+
+// 	// Parse filter parameters
+// 	statusFilter := c.QueryParam("status")
+// 	sortField := c.QueryParam("sort")
+// 	sortOrder := c.QueryParam("order")
+// 	if sortOrder == "" {
+// 		sortOrder = "desc"
+// 	}
+
+// 	// Get nodes from cache (allow stale for better UX)
+// 	nodes, stale, found := h.Cache.GetNodes(false)
+// 	if !found {
+// 		nodes, stale, found = h.Cache.GetNodes(true)
+// 	}
+
+// 	if !found {
+// 		nodes = h.Discovery.GetNodes()
+// 	}
+
+// 	// Filter out incomplete nodes (no pubkey)
+// 	completeNodes := make([]*models.Node, 0, len(nodes))
+// 	for _, node := range nodes {
+// 		if node.Pubkey != "" {
+// 			completeNodes = append(completeNodes, node)
+// 		}
+// 	}
+
+// 		includeOffline := true
+// 	if c.QueryParam("include_offline") == "false" {
+// 		includeOffline = false
+// 	}
+
+// 	// Apply status filter
+// 	// if statusFilter != "" {
+// 	// 	filteredNodes := make([]*models.Node, 0)
+// 	// 	for _, node := range completeNodes {
+// 	// 		if node.Status == statusFilter {
+// 	// 			filteredNodes = append(filteredNodes, node)
+// 	// 		}
+// 	// 	}
+// 	// 	completeNodes = filteredNodes
+// 	// }
+// 	if statusFilter != "" {
+// 		filteredNodes := make([]*models.Node, 0)
+// 		for _, node := range completeNodes {
+// 			if node.Status == statusFilter {
+// 				filteredNodes = append(filteredNodes, node)
+// 			}
+// 		}
+// 		completeNodes = filteredNodes
+// 	} else if !includeOffline {
+// 		// If not showing offline and no specific status filter, exclude offline nodes
+// 		filteredNodes := make([]*models.Node, 0)
+// 		for _, node := range completeNodes {
+// 			if node.Status != "offline" {
+// 				filteredNodes = append(filteredNodes, node)
+// 			}
+// 		}
+// 		completeNodes = filteredNodes
+// 	}
+
+// 	// Sort nodes
+// 	h.sortNodes(completeNodes, sortField, sortOrder)
+
+// 	// Calculate pagination
+// 	totalNodes := len(completeNodes)
+// 	totalPages := (totalNodes + limit - 1) / limit
+// 	if totalPages < 1 {
+// 		totalPages = 1
+// 	}
+
+// 	// Calculate slice bounds
+// 	startIdx := (page - 1) * limit
+// 	endIdx := startIdx + limit
+
+// 	if startIdx >= totalNodes {
+// 		startIdx = 0
+// 		endIdx = 0
+// 		page = 1
+// 	}
+
+// 	if endIdx > totalNodes {
+// 		endIdx = totalNodes
+// 	}
+
+// 	// Slice the results
+// 	paginatedNodes := make([]*models.Node, 0)
+// 	if startIdx < endIdx {
+// 		paginatedNodes = completeNodes[startIdx:endIdx]
+// 	}
+
+// 	// Build response
+// 	response := NodesResponse{
+// 		Nodes: paginatedNodes,
+// 		Pagination: PaginationMeta{
+// 			Page:       page,
+// 			Limit:      limit,
+// 			TotalItems: totalNodes,
+// 			TotalPages: totalPages,
+// 			HasNext:    page < totalPages,
+// 			HasPrev:    page > 1,
+// 		},
+// 	}
+
+// 	// Set headers
+// 	if stale {
+// 		c.Response().Header().Set("X-Data-Stale", "true")
+// 	}
+
+// 	return c.JSON(http.StatusOK, response)
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func (h *Handler) GetNodes(c echo.Context) error {
 	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.QueryParam("page"))
@@ -71,7 +227,8 @@ func (h *Handler) GetNodes(c echo.Context) error {
 	}
 
 	if !found {
-		nodes = h.Discovery.GetNodes()
+		// CHANGED: Get ALL nodes including duplicates
+		nodes = h.Discovery.GetAllNodes()
 	}
 
 	// Filter out incomplete nodes (no pubkey)
@@ -82,21 +239,12 @@ func (h *Handler) GetNodes(c echo.Context) error {
 		}
 	}
 
-		includeOffline := true
+	includeOffline := true
 	if c.QueryParam("include_offline") == "false" {
 		includeOffline = false
 	}
 
 	// Apply status filter
-	// if statusFilter != "" {
-	// 	filteredNodes := make([]*models.Node, 0)
-	// 	for _, node := range completeNodes {
-	// 		if node.Status == statusFilter {
-	// 			filteredNodes = append(filteredNodes, node)
-	// 		}
-	// 	}
-	// 	completeNodes = filteredNodes
-	// }
 	if statusFilter != "" {
 		filteredNodes := make([]*models.Node, 0)
 		for _, node := range completeNodes {
@@ -166,6 +314,14 @@ func (h *Handler) GetNodes(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, response)
 }
+
+
+
+
+
+
+
+
 
 // GetNode godoc
 // @Summary Get a single node by ID
