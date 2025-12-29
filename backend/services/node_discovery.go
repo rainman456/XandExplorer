@@ -1445,6 +1445,8 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		podHost = pod.Address
 	}
 
+
+
 	var rpcAddress string
 	if pod.RpcPort > 0 {
 		rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
@@ -1522,6 +1524,107 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 			},
 		},
 	}
+	// Extract gossip address info
+
+
+
+    // podHost, gossipPortStr, err := net.SplitHostPort(pod.Address)
+    // if err != nil {
+    //     podHost = pod.Address
+    //     gossipPortStr = "0"
+    // }
+    // gossipPort, _ := strconv.Atoi(gossipPortStr)
+
+    // // Construct RPC address
+    // var rpcAddress string
+    // var rpcPort int
+    // if pod.RpcPort > 0 {
+    //     rpcPort = pod.RpcPort
+    //     rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
+    // } else {
+    //     rpcPort = 6000
+    //     rpcAddress = net.JoinHostPort(podHost, "6000")
+    // }
+
+    // nodeID := rpcAddress
+    // if pod.Pubkey != "" {
+    //     nodeID = pod.Pubkey
+    // }
+
+    // // Check if we already have this IP
+    // nd.allNodesMutex.RLock()
+    // _, ipExists := nd.allNodesByIP[podHost]
+    // nd.allNodesMutex.RUnlock()
+
+    // nd.nodesMutex.Lock()
+    // existingNode, exists := nd.knownNodes[nodeID]
+    // nd.nodesMutex.Unlock()
+
+    // if exists {
+    //     nd.nodesMutex.Lock()
+    //     nd.updateNodeFromPod(existingNode, pod)
+    //     nd.nodesMutex.Unlock()
+        
+    //     if !ipExists {
+    //         nd.allNodesMutex.Lock()
+    //         nd.allNodesByIP[podHost] = existingNode
+    //         nd.allNodesMutex.Unlock()
+    //     }
+    //     return
+    // }
+
+    // // Create new node
+    // now := time.Now()
+    // podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
+    
+    // isOnline := time.Since(podLastSeen) < 5*time.Minute
+    // status := "offline"
+    // if isOnline {
+    //     status = "online"
+    // }
+
+    // newNode := &models.Node{
+    //     ID:               nodeID,
+    //     Pubkey:           pod.Pubkey,
+    //     Address:          pod.Address,        // ← CHANGED: Use gossip address for display
+    //     IP:               podHost,
+    //     Port:             gossipPort,         // ← CHANGED: Use gossip port for display
+    //     Version:          pod.Version,
+    //     IsOnline:         isOnline,
+    //     IsPublic:         pod.IsPublic,
+    //     IsRegistered:     nd.registration.IsRegistered(pod.Pubkey),
+    //     FirstSeen:        now,
+    //     LastSeen:         podLastSeen,
+    //     Status:           status,
+    //     UptimeScore:      0,
+    //     PerformanceScore: 0,
+    //     CallHistory:      make([]bool, 0),
+    //     StorageCapacity:  pod.StorageCommitted,
+    //     StorageUsed:      pod.StorageUsed,
+    //     UptimeSeconds:    pod.Uptime,
+    //     Addresses: []models.NodeAddress{
+    //         // GOSSIP address (for display)
+    //         {
+    //             Address:   pod.Address,    // ← Original gossip address
+    //             IP:        podHost,
+    //             Port:      gossipPort,     // ← Gossip port
+    //             Type:      "gossip",       // ← Mark as gossip
+    //             IsPublic:  pod.IsPublic,
+    //             LastSeen:  podLastSeen,
+    //             IsWorking: isOnline,
+    //         },
+    //         // RPC address (for internal use)
+    //         {
+    //             Address:   rpcAddress,     // ← RPC address
+    //             IP:        podHost,
+    //             Port:      rpcPort,        // ← RPC port (6000)
+    //             Type:      "rpc",          // ← Mark as RPC
+    //             IsPublic:  pod.IsPublic,
+    //             LastSeen:  podLastSeen,
+    //             IsWorking: isOnline,
+    //         },
+    //     },
+    // }
 
 	// Calculate uptime score from pod data
 	if pod.Uptime > 0 {
@@ -1687,6 +1790,10 @@ func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
 		} else {
 			rpcAddress = net.JoinHostPort(podHost, "6000")
 		}
+// 		go func(addr string) {
+//     time.Sleep(100 * time.Millisecond)
+//     nd.processNodeAddress(addr)  // ← This should use RPC address
+// }(rpcAddress)
 
 		// Skip self
 		if rpcAddress == address {
