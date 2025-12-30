@@ -466,6 +466,181 @@ func (nd *NodeDiscovery) Bootstrap() {
 
 
 
+// func (nd *NodeDiscovery) processNodeAddress(address string) {
+// 	nd.failedMutex.RLock()
+// 	lastFailed, failed := nd.failedAddresses[address]
+// 	nd.failedMutex.RUnlock()
+	
+// 	if failed && time.Since(lastFailed) < 5*time.Minute {
+// 		return
+// 	}
+
+// 	host, portStr, _ := net.SplitHostPort(address)
+// 	port, _ := strconv.Atoi(portStr)
+
+// 	nd.allNodesMutex.RLock()
+// 	_, ipExists := nd.allNodesByIP[host]
+// 	nd.allNodesMutex.RUnlock()
+	
+// 	if ipExists {
+// 		return
+// 	}
+
+// 	nd.rateLimiter <- struct{}{}
+// 	defer func() { <-nd.rateLimiter }()
+
+// 	verResp, err := nd.prpc.GetVersion(address)
+// 	if err != nil {
+// 		nd.failedMutex.Lock()
+// 		nd.failedAddresses[address] = time.Now()
+// 		nd.failedMutex.Unlock()
+		
+// 		pubkey := nd.findPubkeyForIP(host)
+// 		nodeID := address
+// 		if pubkey != "" {
+// 			nodeID = pubkey
+// 		}
+		
+// 		nd.nodesMutex.RLock()
+// 		_, exists := nd.knownNodes[nodeID]
+// 		nd.nodesMutex.RUnlock()
+		
+// 		if !exists {
+// 			offlineNode := nd.createOfflineNode(address, host, port, pubkey)
+// 			nd.allNodesMutex.Lock()
+// 			nd.allNodesByIP[host] = offlineNode
+// 			nd.allNodesMutex.Unlock()
+// 		}
+// 		return
+// 	}
+
+// 	nd.failedMutex.Lock()
+// 	delete(nd.failedAddresses, address)
+// 	nd.failedMutex.Unlock()
+
+// 	pubkey := nd.findPubkeyForIP(host)
+// 	var nodeID string
+// 	if pubkey != "" {
+// 		nodeID = pubkey
+// 	} else {
+// 		nodeID = address
+// 	}
+	
+// 	nd.nodesMutex.RLock()
+// 	existingNode, nodeExists := nd.knownNodes[nodeID]
+// 	nd.nodesMutex.RUnlock()
+	
+// 	if nodeExists {
+// 		// Update existing node WITHOUT changing gossip address
+// 		nd.nodesMutex.Lock()
+// 		existingNode.IsOnline = true
+// 		existingNode.LastSeen = time.Now()
+// 		existingNode.Version = verResp.Version
+// 		existingNode.Status = "online"
+		
+// 		// Only update pubkey if we didn't have one before
+// 		if existingNode.Pubkey == "" && pubkey != "" {
+// 			existingNode.Pubkey = pubkey
+// 			existingNode.IsRegistered = nd.registration.IsRegistered(pubkey)
+// 			existingNode.ID = pubkey
+// 			nd.knownNodes[pubkey] = existingNode
+// 			delete(nd.knownNodes, nodeID)
+// 		}
+		
+// 		// Add RPC address to addresses array if not already there
+// 		hasRPC := false
+// 		for i := range existingNode.Addresses {
+// 			if existingNode.Addresses[i].Type == "rpc" {
+// 				existingNode.Addresses[i].LastSeen = time.Now()
+// 				existingNode.Addresses[i].IsWorking = true
+// 				hasRPC = true
+// 				break
+// 			}
+// 		}
+// 		if !hasRPC {
+// 			existingNode.Addresses = append(existingNode.Addresses, models.NodeAddress{
+// 				Address:   address,
+// 				IP:        host,
+// 				Port:      port,
+// 				Type:      "rpc",
+// 				LastSeen:  time.Now(),
+// 				IsWorking: true,
+// 			})
+// 		}
+// 		nd.nodesMutex.Unlock()
+		
+// 		nd.allNodesMutex.Lock()
+// 		if _, tracked := nd.allNodesByIP[host]; !tracked {
+// 			nd.allNodesByIP[host] = existingNode
+// 		}
+// 		nd.allNodesMutex.Unlock()
+// 		return
+// 	}
+
+// 	// Create new node - this should rarely happen since createNodeFromPod runs first
+// 	newNode := &models.Node{
+// 		ID:               nodeID,
+// 		Pubkey:           pubkey,
+// 		Address:          address, // Temporary, will be updated by updateNodeFromPod
+// 		IP:               host,
+// 		Port:             port,
+// 		Version:          verResp.Version,
+// 		IsOnline:         true,
+// 		IsRegistered:     nd.registration.IsRegistered(pubkey),
+// 		FirstSeen:        time.Now(),
+// 		LastSeen:         time.Now(),
+// 		Status:           "online",
+// 		UptimeScore:      100,
+// 		PerformanceScore: 100,
+// 		CallHistory:      make([]bool, 0, 10),
+// 		SuccessCalls:     1,
+// 		TotalCalls:       1,
+// 		Addresses: []models.NodeAddress{
+// 			{
+// 				Address:   address,
+// 				IP:        host,
+// 				Port:      port,
+// 				Type:      "rpc",
+// 				LastSeen:  time.Now(),
+// 				IsWorking: true,
+// 			},
+// 		},
+// 	}
+
+// 	versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
+// 	newNode.VersionStatus = versionStatus
+// 	newNode.IsUpgradeNeeded = needsUpgrade
+// 	newNode.UpgradeSeverity = severity
+// 	newNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
+
+// 	country, city, lat, lon := nd.geo.Lookup(host)
+// 	newNode.Country = country
+// 	newNode.City = city
+// 	newNode.Lat = lat
+// 	newNode.Lon = lon
+
+// 	nd.nodesMutex.Lock()
+// 	nd.knownNodes[nodeID] = newNode
+// 	nd.nodesMutex.Unlock()
+
+// 	nd.allNodesMutex.Lock()
+// 	nd.allNodesByIP[host] = newNode
+// 	nd.allNodesMutex.Unlock()
+
+// 	nd.ipMutex.Lock()
+// 	nd.ipToNodes[host] = append(nd.ipToNodes[host], newNode)
+// 	nd.ipMutex.Unlock()
+
+// 	if pubkey != "" {
+// 		nd.enrichNodeWithCredits(newNode)
+// 	}
+
+// 	go nd.discoverPeersFromNode(address)
+// }
+
+
+
+
 func (nd *NodeDiscovery) processNodeAddress(address string) {
 	nd.failedMutex.RLock()
 	lastFailed, failed := nd.failedAddresses[address]
@@ -507,6 +682,10 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 		
 		if !exists {
 			offlineNode := nd.createOfflineNode(address, host, port, pubkey)
+			// REMOVED: offlineNode.IsOnline = false
+			// Let DetermineStatus handle it
+			utils.DetermineStatus(offlineNode)
+			
 			nd.allNodesMutex.Lock()
 			nd.allNodesByIP[host] = offlineNode
 			nd.allNodesMutex.Unlock()
@@ -531,14 +710,12 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 	nd.nodesMutex.RUnlock()
 	
 	if nodeExists {
-		// Update existing node WITHOUT changing gossip address
 		nd.nodesMutex.Lock()
-		existingNode.IsOnline = true
+		// REMOVED: existingNode.IsOnline = true
 		existingNode.LastSeen = time.Now()
 		existingNode.Version = verResp.Version
-		existingNode.Status = "online"
+		// REMOVED: existingNode.Status = "online"
 		
-		// Only update pubkey if we didn't have one before
 		if existingNode.Pubkey == "" && pubkey != "" {
 			existingNode.Pubkey = pubkey
 			existingNode.IsRegistered = nd.registration.IsRegistered(pubkey)
@@ -547,7 +724,6 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 			delete(nd.knownNodes, nodeID)
 		}
 		
-		// Add RPC address to addresses array if not already there
 		hasRPC := false
 		for i := range existingNode.Addresses {
 			if existingNode.Addresses[i].Type == "rpc" {
@@ -567,6 +743,10 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 				IsWorking: true,
 			})
 		}
+		
+		// Let DetermineStatus make the final decision
+		utils.DetermineStatus(existingNode)
+		utils.CalculateScore(existingNode)
 		nd.nodesMutex.Unlock()
 		
 		nd.allNodesMutex.Lock()
@@ -577,19 +757,19 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 		return
 	}
 
-	// Create new node - this should rarely happen since createNodeFromPod runs first
+	// Create new node
 	newNode := &models.Node{
 		ID:               nodeID,
 		Pubkey:           pubkey,
-		Address:          address, // Temporary, will be updated by updateNodeFromPod
+		Address:          address,
 		IP:               host,
 		Port:             port,
 		Version:          verResp.Version,
-		IsOnline:         true,
+		// REMOVED: IsOnline: true,
 		IsRegistered:     nd.registration.IsRegistered(pubkey),
 		FirstSeen:        time.Now(),
 		LastSeen:         time.Now(),
-		Status:           "online",
+		// REMOVED: Status: "online",
 		UptimeScore:      100,
 		PerformanceScore: 100,
 		CallHistory:      make([]bool, 0, 10),
@@ -618,6 +798,10 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 	newNode.City = city
 	newNode.Lat = lat
 	newNode.Lon = lon
+
+	// Let DetermineStatus set is_online and status
+	utils.DetermineStatus(newNode)
+	utils.CalculateScore(newNode)
 
 	nd.nodesMutex.Lock()
 	nd.knownNodes[nodeID] = newNode
@@ -676,6 +860,80 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 
 
 
+// func (nd *NodeDiscovery) createOfflineNode(address, host string, port int, pubkey string) *models.Node {
+// 	nodeID := address
+// 	if pubkey != "" {
+// 		nodeID = pubkey
+// 	}
+	
+// 	offlineNode := &models.Node{
+// 		ID:               nodeID,
+// 		Pubkey:           pubkey,
+// 		Address:          address,
+// 		IP:               host,
+// 		Port:             port,
+// 		Version:          "unknown",
+// 		IsOnline:         false,
+// 		IsRegistered:     nd.registration.IsRegistered(pubkey),
+// 		FirstSeen:        time.Now(),
+// 		LastSeen:         time.Now().Add(-10 * time.Minute), // Mark as not seen recently
+// 		Status:           "offline",
+// 		UptimeScore:      0,
+// 		PerformanceScore: 0,
+// 		CallHistory:      make([]bool, 0),
+// 		SuccessCalls:     0,
+// 		TotalCalls:       1, // Mark that we tried
+// 		Addresses: []models.NodeAddress{
+// 			{
+// 				Address:   address,
+// 				IP:        host,
+// 				Port:      port,
+// 				Type:      "rpc",
+// 				LastSeen:  time.Now(),
+// 				IsWorking: false,
+// 			},
+// 		},
+// 	}
+	
+// 	// GeoIP lookup even for offline nodes
+// 	country, city, lat, lon := nd.geo.Lookup(host)
+// 	offlineNode.Country = country
+// 	offlineNode.City = city
+// 	offlineNode.Lat = lat
+// 	offlineNode.Lon = lon
+	
+// 	// Version status
+// 	offlineNode.VersionStatus = "unknown"
+// 	offlineNode.IsUpgradeNeeded = false
+// 	offlineNode.UpgradeSeverity = "none"
+// 	offlineNode.UpgradeMessage = ""
+	
+// 	// Store offline node
+// 	nd.nodesMutex.Lock()
+// 	nd.knownNodes[nodeID] = offlineNode
+// 	nd.nodesMutex.Unlock()
+	
+// 	// Add to IP index
+// 	nd.ipMutex.Lock()
+// 	nd.ipToNodes[host] = append(nd.ipToNodes[host], offlineNode)
+// 	nd.ipMutex.Unlock()
+	
+// 	log.Printf("Tracked offline node: %s (%s, registered: %v) - will retry in health checks", 
+// 		address, country, offlineNode.IsRegistered)
+	
+// 	return offlineNode
+// }
+
+
+
+
+
+
+
+
+
+
+
 
 func (nd *NodeDiscovery) createOfflineNode(address, host string, port int, pubkey string) *models.Node {
 	nodeID := address
@@ -690,16 +948,16 @@ func (nd *NodeDiscovery) createOfflineNode(address, host string, port int, pubke
 		IP:               host,
 		Port:             port,
 		Version:          "unknown",
-		IsOnline:         false,
+		// REMOVED: IsOnline: false,
 		IsRegistered:     nd.registration.IsRegistered(pubkey),
 		FirstSeen:        time.Now(),
-		LastSeen:         time.Now().Add(-10 * time.Minute), // Mark as not seen recently
-		Status:           "offline",
+		LastSeen:         time.Now().Add(-10 * time.Minute),
+		// REMOVED: Status: "offline",
 		UptimeScore:      0,
 		PerformanceScore: 0,
 		CallHistory:      make([]bool, 0),
 		SuccessCalls:     0,
-		TotalCalls:       1, // Mark that we tried
+		TotalCalls:       1,
 		Addresses: []models.NodeAddress{
 			{
 				Address:   address,
@@ -712,25 +970,24 @@ func (nd *NodeDiscovery) createOfflineNode(address, host string, port int, pubke
 		},
 	}
 	
-	// GeoIP lookup even for offline nodes
 	country, city, lat, lon := nd.geo.Lookup(host)
 	offlineNode.Country = country
 	offlineNode.City = city
 	offlineNode.Lat = lat
 	offlineNode.Lon = lon
 	
-	// Version status
 	offlineNode.VersionStatus = "unknown"
 	offlineNode.IsUpgradeNeeded = false
 	offlineNode.UpgradeSeverity = "none"
 	offlineNode.UpgradeMessage = ""
 	
-	// Store offline node
+	// Let DetermineStatus make the decision
+	utils.DetermineStatus(offlineNode)
+	
 	nd.nodesMutex.Lock()
 	nd.knownNodes[nodeID] = offlineNode
 	nd.nodesMutex.Unlock()
 	
-	// Add to IP index
 	nd.ipMutex.Lock()
 	nd.ipToNodes[host] = append(nd.ipToNodes[host], offlineNode)
 	nd.ipMutex.Unlock()
@@ -740,6 +997,11 @@ func (nd *NodeDiscovery) createOfflineNode(address, host string, port int, pubke
 	
 	return offlineNode
 }
+
+
+
+
+
 
 
 
@@ -944,14 +1206,82 @@ func (nd *NodeDiscovery) collectStats() {
 	time.Sleep(2 * time.Second)
 }
 
+
+
+// func (nd *NodeDiscovery) healthCheck() {
+// 	nodes := nd.GetNodes()
+	
+// 	for _, node := range nodes {
+// 		nd.rateLimiter <- struct{}{}
+		
+// 		go func(n *models.Node) {
+// 			defer func() { <-nd.rateLimiter }()
+			
+// 			start := time.Now()
+// 			verResp, err := nd.prpc.GetVersion(n.Address)
+// 			latency := time.Since(start).Milliseconds()
+
+// 			nd.nodesMutex.Lock()
+// 			defer nd.nodesMutex.Unlock()
+
+// 			storedNode, exists := nd.knownNodes[n.ID]
+// 			if !exists {
+// 				return
+// 			}
+
+// 			storedNode.ResponseTime = latency
+// 			updateCallHistory(storedNode, err == nil)
+// 			storedNode.TotalCalls++
+			
+// 			if err == nil {
+// 				storedNode.SuccessCalls++
+// 				storedNode.IsOnline = true
+// 				storedNode.LastSeen = time.Now()
+// 				storedNode.Version = verResp.Version
+				
+// 				versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
+// 				storedNode.VersionStatus = versionStatus
+// 				storedNode.IsUpgradeNeeded = needsUpgrade
+// 				storedNode.UpgradeSeverity = severity
+// 				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
+// 			} else {
+// 				storedNode.IsOnline = false
+				
+// 				offlineDuration := time.Since(storedNode.LastSeen)
+				
+// 				if storedNode.TotalCalls%10 == 0 {
+// 					log.Printf("Node %s offline for %v (keeping in database)", 
+// 						storedNode.ID, offlineDuration.Round(time.Minute))
+// 				}
+// 			}
+			
+// 			utils.DetermineStatus(storedNode)
+// 			utils.CalculateScore(storedNode)
+// 		}(node)
+// 	}
+// }
+
+
+
+
+// Add this to backend/services/node_discovery.go
+// Replace the healthCheck function around line 600
+
 func (nd *NodeDiscovery) healthCheck() {
 	nodes := nd.GetNodes()
 	
+	// Use semaphore to prevent overwhelming the network
+	sem := make(chan struct{}, 20)
+	var wg sync.WaitGroup
+	
 	for _, node := range nodes {
-		nd.rateLimiter <- struct{}{}
+		wg.Add(1)
 		
 		go func(n *models.Node) {
-			defer func() { <-nd.rateLimiter }()
+			defer wg.Done()
+			
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			
 			start := time.Now()
 			verResp, err := nd.prpc.GetVersion(n.Address)
@@ -971,7 +1301,7 @@ func (nd *NodeDiscovery) healthCheck() {
 			
 			if err == nil {
 				storedNode.SuccessCalls++
-				storedNode.IsOnline = true
+				// REMOVED: storedNode.IsOnline = true
 				storedNode.LastSeen = time.Now()
 				storedNode.Version = verResp.Version
 				
@@ -980,22 +1310,20 @@ func (nd *NodeDiscovery) healthCheck() {
 				storedNode.IsUpgradeNeeded = needsUpgrade
 				storedNode.UpgradeSeverity = severity
 				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
-			} else {
-				storedNode.IsOnline = false
-				
-				offlineDuration := time.Since(storedNode.LastSeen)
-				
-				if storedNode.TotalCalls%10 == 0 {
-					log.Printf("Node %s offline for %v (keeping in database)", 
-						storedNode.ID, offlineDuration.Round(time.Minute))
-				}
 			}
+			// REMOVED: else block that immediately set IsOnline = false
 			
+			// Let DetermineStatus make the final call based on ALL evidence
 			utils.DetermineStatus(storedNode)
 			utils.CalculateScore(storedNode)
 		}(node)
 	}
+	
+	// Wait for all health checks to complete
+	wg.Wait()
 }
+
+
 
 func updateCallHistory(n *models.Node, success bool) {
 	if n.CallHistory == nil {
@@ -1141,7 +1469,6 @@ func (nd *NodeDiscovery) updateStats(node *models.Node, stats *models.StatsRespo
 
 
 func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
-	// Extract gossip info from pod
 	podHost, gossipPortStr, err := net.SplitHostPort(pod.Address)
 	if err != nil {
 		podHost = pod.Address
@@ -1189,31 +1516,23 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 		podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
 		if podLastSeen.After(node.LastSeen) {
 			node.LastSeen = podLastSeen
-			if time.Since(podLastSeen) < 2*time.Minute {
-				node.IsOnline = true
-			}
+			// REMOVED: if time.Since(podLastSeen) < 2*time.Minute { node.IsOnline = true }
 		}
 	}
 	
-	// CRITICAL: Only update primary address if we don't have a gossip address yet
-	// Check if current address looks like a gossip address (has unique port)
 	currentIsGossip := node.Port != 6000 && node.Port > 0
 	
 	if !currentIsGossip && gossipPort > 0 {
-		// We have RPC address but got gossip - upgrade to gossip
 		node.Address = pod.Address
 		node.Port = gossipPort
 	}
 	
-	// Update addresses array
-	// Check if we already have gossip address
 	hasGossip := false
 	hasRPC := false
 	
 	for i := range node.Addresses {
 		if node.Addresses[i].Type == "gossip" {
 			hasGossip = true
-			// Update gossip entry
 			if gossipPort > 0 {
 				node.Addresses[i].Address = pod.Address
 				node.Addresses[i].Port = gossipPort
@@ -1226,7 +1545,6 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 		}
 	}
 	
-	// Add gossip if missing
 	if !hasGossip && gossipPort > 0 {
 		node.Addresses = append([]models.NodeAddress{
 			{
@@ -1236,12 +1554,11 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 				Type:      "gossip",
 				IsPublic:  pod.IsPublic,
 				LastSeen:  time.Unix(pod.LastSeenTimestamp, 0),
-				IsWorking: node.IsOnline,
+				IsWorking: true,
 			},
 		}, node.Addresses...)
 	}
 	
-	// Add RPC if missing and different from gossip
 	if !hasRPC && pod.RpcPort > 0 && pod.RpcPort != gossipPort {
 		rpcAddress := net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
 		node.Addresses = append(node.Addresses, models.NodeAddress{
@@ -1251,9 +1568,13 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 			Type:      "rpc",
 			IsPublic:  pod.IsPublic,
 			LastSeen:  time.Unix(pod.LastSeenTimestamp, 0),
-			IsWorking: node.IsOnline,
+			IsWorking: false,
 		})
 	}
+	
+	// Recalculate status after updating with pod data
+	utils.DetermineStatus(node)
+	utils.CalculateScore(node)
 }
 
 
@@ -1622,11 +1943,8 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 
 	now := time.Now()
 	podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
-	isOnline := time.Since(podLastSeen) < 5*time.Minute
-	status := "offline"
-	if isOnline {
-		status = "online"
-	}
+	// REMOVED: isOnline calculation
+	// REMOVED: status calculation
 
 	addresses := []models.NodeAddress{}
 	
@@ -1638,7 +1956,7 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 			Type:      "gossip",
 			IsPublic:  pod.IsPublic,
 			LastSeen:  podLastSeen,
-			IsWorking: isOnline,
+			IsWorking: true, // Assume working since it's in peer list
 		})
 	}
 	
@@ -1650,7 +1968,7 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 			Type:      "rpc",
 			IsPublic:  pod.IsPublic,
 			LastSeen:  podLastSeen,
-			IsWorking: isOnline,
+			IsWorking: false, // Unknown until we try
 		})
 	}
 
@@ -1661,12 +1979,12 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		IP:               podHost,
 		Port:             gossipPort,
 		Version:          pod.Version,
-		IsOnline:         isOnline,
+		// REMOVED: IsOnline: isOnline,
 		IsPublic:         pod.IsPublic,
 		IsRegistered:     nd.registration.IsRegistered(pod.Pubkey),
 		FirstSeen:        now,
 		LastSeen:         podLastSeen,
-		Status:           status,
+		// REMOVED: Status: status,
 		UptimeScore:      0,
 		PerformanceScore: 0,
 		CallHistory:      make([]bool, 0),
@@ -1694,6 +2012,7 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 	newNode.Lat = lat
 	newNode.Lon = lon
 
+	// Let DetermineStatus make the final decision
 	utils.CalculateScore(newNode)
 	utils.DetermineStatus(newNode)
 
@@ -1713,11 +2032,9 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		nd.enrichNodeWithCredits(newNode)
 	}
 
-	log.Printf("Created node from pod: %s (gossip: %s, rpc: %s, %s, %s, public=%v, registered=%v, status=%s)", 
-		nodeID, pod.Address, rpcAddress, country, pod.Version, pod.IsPublic, newNode.IsRegistered, status)
+	log.Printf("Created node from pod: %s (gossip: %s, rpc: %s, %s, %s, public=%v, registered=%v)", 
+		nodeID, pod.Address, rpcAddress, country, pod.Version, pod.IsPublic, newNode.IsRegistered)
 }
-
-
 
 
 
