@@ -215,128 +215,118 @@ func (nd *NodeDiscovery) Bootstrap() {
 	log.Printf("Bootstrap finished. Total nodes discovered: %d", finalCount)
 }
 
+
 // func (nd *NodeDiscovery) processNodeAddress(address string) {
+// 	// Check if recently failed (skip for 5 minutes)
 // 	nd.failedMutex.RLock()
 // 	lastFailed, failed := nd.failedAddresses[address]
 // 	nd.failedMutex.RUnlock()
 	
 // 	if failed && time.Since(lastFailed) < 5*time.Minute {
-// 		return
+// 		return // Skip recently failed addresses
 // 	}
 
 // 	host, portStr, _ := net.SplitHostPort(address)
 // 	port, _ := strconv.Atoi(portStr)
 
-// 	// Check if this exact address already exists (using composite key)
-// 	// pubkey := nd.findPubkeyForIP(host)
-// 	// nodeKey := makeNodeKey(pubkey, host)
+// 	// Check if we already have this IP in allNodesByIP
+// 	nd.allNodesMutex.RLock()
+// 	_, ipExists := nd.allNodesByIP[host]
+// 	nd.allNodesMutex.RUnlock()
 	
-// 	// nd.nodesMutex.RLock()
-// 	// _, exists := nd.knownNodes[nodeKey]
-// 	// nd.nodesMutex.RUnlock()
-	
-// 	// if exists {
-// 	// 	return // Already have this exact node (pubkey+IP combination)
-// 	// }
-
-
-
-// nd.allNodesMutex.RLock()
-// _, ipExists := nd.allNodesByIP[host]
-// nd.allNodesMutex.RUnlock()
-
-// if ipExists {
+// 	if ipExists {
 // 		return // Already tracking this IP
 // 	}
 
+// 	// Rate limit
+// 	nd.rateLimiter <- struct{}{}
+// 	defer func() { <-nd.rateLimiter }()
 
-// 	// Check if this exact address already exists
-// 	nd.ipMutex.RLock()
-// 	existingNodes := nd.ipToNodes[host]
-// 	for _, node := range existingNodes {
-// 		if node.Address == address {
-// 			nd.ipMutex.RUnlock()
-// 			return // Already processed
+// 	// Verify connectivity
+// 	verResp, err := nd.prpc.GetVersion(address)
+// 	if err != nil {
+// 		// CRITICAL FIX: Create offline node entry even for failed connections
+// 		nd.failedMutex.Lock()
+// 		nd.failedAddresses[address] = time.Now()
+// 		failCount := len(nd.failedAddresses)
+// 		nd.failedMutex.Unlock()
+		
+// 		// Only log every 10th failure to reduce spam
+// 		if failCount%10 == 0 {
+// 			log.Printf("DEBUG: %d addresses currently unreachable", failCount)
 // 		}
+		
+// 		// Try to find pubkey for this IP from other nodes
+// 		pubkey := nd.findPubkeyForIP(host)
+// 		nodeID := address
+// 		if pubkey != "" {
+// 			nodeID = pubkey
+// 		}
+		
+// 		// Check if we already have this node
+// 		nd.nodesMutex.RLock()
+// 		_, exists := nd.knownNodes[nodeID]
+// 		nd.nodesMutex.RUnlock()
+		
+// 		if !exists {
+// 			// Create offline node placeholder
+// 			offlineNode := nd.createOfflineNode(address, host, port, pubkey)
+			
+// 			// ALWAYS store in allNodesByIP regardless of pubkey
+// 			nd.allNodesMutex.Lock()
+// 			nd.allNodesByIP[host] = offlineNode
+// 			nd.allNodesMutex.Unlock()
+// 		}
+		
+// 		return
 // 	}
-// 	nd.ipMutex.RUnlock()
 
-
-// nd.rateLimiter <- struct{}{}
-// defer func() { <-nd.rateLimiter }()
-
-// verResp, err := nd.prpc.GetVersion(address)
-// if err != nil {
+// 	// Clear from failed list if it was there
 // 	nd.failedMutex.Lock()
-// 	nd.failedAddresses[address] = time.Now()
-// 	failCount := len(nd.failedAddresses)
+// 	delete(nd.failedAddresses, address)
 // 	nd.failedMutex.Unlock()
-	
-// 	if failCount%10 == 0 {
-// 		log.Printf("DEBUG: %d addresses currently unreachable", failCount)
-// 	}
-	
-// 	// Try to find pubkey for this IP from other nodes
+
+// 	log.Printf("DEBUG: ✓ Connected to %s, version %s", address, verResp.Version)
+
+// 	// Try to get pubkey IMMEDIATELY by querying a known node's peer list
 // 	pubkey := nd.findPubkeyForIP(host)
-// 	nodeID := address
+
+// 	var nodeID string
 // 	if pubkey != "" {
 // 		nodeID = pubkey
+// 		log.Printf("DEBUG: ✓ Found pubkey for %s: %s", address, pubkey)
+// 	} else {
+// 		nodeID = address // Temporary ID
+// 		log.Printf("DEBUG: No pubkey yet for %s, using address as ID", address)
 // 	}
 	
-// 	// Check if we already have this node
-// 	nd.nodesMutex.RLock()
-// 	_, exists := nd.knownNodes[nodeID]
-// 	nd.nodesMutex.RUnlock()
-	
-// 	// Create offline node if we don't have it yet
-// 	if !exists {
-// 		nd.createOfflineNode(address, host, port, pubkey)
-		
-// 	}
-	
-// 	return
-// }
-
-// nd.failedMutex.Lock()
-// delete(nd.failedAddresses, address)
-// nd.failedMutex.Unlock()
-
-// log.Printf("DEBUG: ✓ Connected to %s, version %s", address, verResp.Version)
-
-// // Try to get pubkey by querying peer lists
-// pubkey := nd.findPubkeyForIP(host)
-
-// // Create composite key
-// //nodeKey := makeNodeKey(pubkey, host)
-
-// var nodeID string
-// if pubkey != "" {
-// 	nodeID = pubkey
-// 	log.Printf("DEBUG: ✓ Found pubkey for %s: %s", address, pubkey)
-// } else {
-// 	nodeID = address // Temporary ID
-// 	log.Printf("DEBUG: No pubkey yet for %s, using address as ID", address)
-// }
-	
+// 	// Check if we already have this node (might have been created as offline)
 // 	nd.nodesMutex.RLock()
 // 	existingNode, nodeExists := nd.knownNodes[nodeID]
 // 	nd.nodesMutex.RUnlock()
 	
 // 	if nodeExists && existingNode.IsOnline {
 // 		log.Printf("DEBUG: Node %s already exists and is online, skipping", nodeID)
+		
+// 		// But still store in allNodesByIP if this is a different IP
+// 		nd.allNodesMutex.Lock()
+// 		if _, ipAlreadyTracked := nd.allNodesByIP[host]; !ipAlreadyTracked {
+// 			nd.allNodesByIP[host] = existingNode
+// 		}
+// 		nd.allNodesMutex.Unlock()
 // 		return
 // 	}
 
-// 	// Create new node
+// 	// Create or update node
 // 	newNode := &models.Node{
-// 		ID:               nodeID, // CHANGED: Use composite key
+// 		ID:               nodeID,
 // 		Pubkey:           pubkey,
 // 		Address:          address,
 // 		IP:               host,
 // 		Port:             port,
 // 		Version:          verResp.Version,
 // 		IsOnline:         true,
-// 		IsRegistered:     nd.registration.IsRegistered(pubkey), // NEW
+// 		IsRegistered:     nd.registration.IsRegistered(pubkey),
 // 		FirstSeen:        time.Now(),
 // 		LastSeen:         time.Now(),
 // 		Status:           "online",
@@ -357,6 +347,7 @@ func (nd *NodeDiscovery) Bootstrap() {
 // 		},
 // 	}
 	
+// 	// If node existed as offline, preserve FirstSeen timestamp
 // 	if nodeExists {
 // 		newNode.FirstSeen = existingNode.FirstSeen
 // 		newNode.CallHistory = existingNode.CallHistory
@@ -364,66 +355,64 @@ func (nd *NodeDiscovery) Bootstrap() {
 // 		newNode.SuccessCalls = existingNode.SuccessCalls + 1
 // 	}
 
+// 	// Version status
 // 	versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
 // 	newNode.VersionStatus = versionStatus
 // 	newNode.IsUpgradeNeeded = needsUpgrade
 // 	newNode.UpgradeSeverity = severity
 // 	newNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
 
+// 	// Get stats
 // 	statsResp, err := nd.prpc.GetStats(address)
 // 	if err == nil {
 // 		nd.updateStats(newNode, statsResp)
 // 	}
 
+// 	// GeoIP
 // 	country, city, lat, lon := nd.geo.Lookup(host)
 // 	newNode.Country = country
 // 	newNode.City = city
 // 	newNode.Lat = lat
 // 	newNode.Lon = lon
 
-// 	// Store in knownNodes with composite key
+// 	// Store in BOTH maps
 // 	nd.nodesMutex.Lock()
 // 	nd.knownNodes[nodeID] = newNode
 // 	nd.nodesMutex.Unlock()
 
-// 	// Add to pubkey index
-// 	// if pubkey != "" {
-// 	// 	nd.pubkeyMutex.Lock()
-// 	// 	nd.pubkeyToNodes[pubkey] = append(nd.pubkeyToNodes[pubkey], newNode)
-// 	// 	nd.pubkeyMutex.Unlock()
-// 	// }
+// 	// CRITICAL: Always store by IP address
+// 	nd.allNodesMutex.Lock()
+// 	nd.allNodesByIP[host] = newNode
+// 	nd.allNodesMutex.Unlock()
 
-// // // Add to IP index
-// // nd.ipMutex.Lock()
-// // nd.ipToNodes[host] = append(nd.ipToNodes[host], newNode)
-// // nd.ipMutex.Unlock()
-
-// // Add to IP index (or update if it was offline before)
-// nd.ipMutex.Lock()
-// if !nodeExists {
-// 	nd.ipToNodes[host] = append(nd.ipToNodes[host], newNode)
-// } else {
-// 	// Update reference in IP index
-// 	for i, n := range nd.ipToNodes[host] {
-// 		if n.ID == nodeID {
-// 			nd.ipToNodes[host][i] = newNode
-// 			break
+// 	// Add to IP index (or update if it was offline before)
+// 	nd.ipMutex.Lock()
+// 	if !nodeExists {
+// 		nd.ipToNodes[host] = append(nd.ipToNodes[host], newNode)
+// 	} else {
+// 		// Update reference in IP index
+// 		for i, n := range nd.ipToNodes[host] {
+// 			if n.ID == nodeID {
+// 				nd.ipToNodes[host][i] = newNode
+// 				break
+// 			}
 // 		}
 // 	}
-// }
-// nd.ipMutex.Unlock()
+// 	nd.ipMutex.Unlock()
 
+// 	// Enrich with credits if we have pubkey
 // 	if pubkey != "" {
 // 		nd.enrichNodeWithCredits(newNode)
 // 	}
 
-// 	log.Printf("Discovered node: %s (%s, %s) [pubkey: %s, registered: %v, status: %s]", 
+// 	log.Printf("Discovered node: %s (%s, %s) [pubkey: %s, registered: %v, status: online → %s]", 
 // 		address, country, verResp.Version, 
 // 		func() string { 
 // 			if pubkey != "" { 
 // 				return pubkey[:8] + "..." 
-// 			}
-// 			return "pending" 
+// 			} else { 
+// 				return "pending" 
+// 			} 
 // 		}(),
 // 		newNode.IsRegistered,
 // 		func() string {
@@ -433,6 +422,7 @@ func (nd *NodeDiscovery) Bootstrap() {
 // 			return "new"
 // 		}())
 
+// 	// Discover peers asynchronously (will help find more pubkeys)
 // 	go nd.discoverPeersFromNode(address)
 // }
 
@@ -444,112 +434,154 @@ func (nd *NodeDiscovery) Bootstrap() {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func (nd *NodeDiscovery) processNodeAddress(address string) {
-	// Check if recently failed (skip for 5 minutes)
 	nd.failedMutex.RLock()
 	lastFailed, failed := nd.failedAddresses[address]
 	nd.failedMutex.RUnlock()
 	
 	if failed && time.Since(lastFailed) < 5*time.Minute {
-		return // Skip recently failed addresses
+		return
 	}
 
 	host, portStr, _ := net.SplitHostPort(address)
 	port, _ := strconv.Atoi(portStr)
 
-	// Check if we already have this IP in allNodesByIP
 	nd.allNodesMutex.RLock()
 	_, ipExists := nd.allNodesByIP[host]
 	nd.allNodesMutex.RUnlock()
 	
 	if ipExists {
-		return // Already tracking this IP
+		return
 	}
 
-	// Rate limit
 	nd.rateLimiter <- struct{}{}
 	defer func() { <-nd.rateLimiter }()
 
-	// Verify connectivity
 	verResp, err := nd.prpc.GetVersion(address)
 	if err != nil {
-		// CRITICAL FIX: Create offline node entry even for failed connections
 		nd.failedMutex.Lock()
 		nd.failedAddresses[address] = time.Now()
-		failCount := len(nd.failedAddresses)
 		nd.failedMutex.Unlock()
 		
-		// Only log every 10th failure to reduce spam
-		if failCount%10 == 0 {
-			log.Printf("DEBUG: %d addresses currently unreachable", failCount)
-		}
-		
-		// Try to find pubkey for this IP from other nodes
 		pubkey := nd.findPubkeyForIP(host)
 		nodeID := address
 		if pubkey != "" {
 			nodeID = pubkey
 		}
 		
-		// Check if we already have this node
 		nd.nodesMutex.RLock()
 		_, exists := nd.knownNodes[nodeID]
 		nd.nodesMutex.RUnlock()
 		
 		if !exists {
-			// Create offline node placeholder
 			offlineNode := nd.createOfflineNode(address, host, port, pubkey)
-			
-			// ALWAYS store in allNodesByIP regardless of pubkey
 			nd.allNodesMutex.Lock()
 			nd.allNodesByIP[host] = offlineNode
 			nd.allNodesMutex.Unlock()
 		}
-		
 		return
 	}
 
-	// Clear from failed list if it was there
 	nd.failedMutex.Lock()
 	delete(nd.failedAddresses, address)
 	nd.failedMutex.Unlock()
 
-	log.Printf("DEBUG: ✓ Connected to %s, version %s", address, verResp.Version)
-
-	// Try to get pubkey IMMEDIATELY by querying a known node's peer list
 	pubkey := nd.findPubkeyForIP(host)
-
 	var nodeID string
 	if pubkey != "" {
 		nodeID = pubkey
-		log.Printf("DEBUG: ✓ Found pubkey for %s: %s", address, pubkey)
 	} else {
-		nodeID = address // Temporary ID
-		log.Printf("DEBUG: No pubkey yet for %s, using address as ID", address)
+		nodeID = address
 	}
 	
-	// Check if we already have this node (might have been created as offline)
 	nd.nodesMutex.RLock()
 	existingNode, nodeExists := nd.knownNodes[nodeID]
 	nd.nodesMutex.RUnlock()
 	
-	if nodeExists && existingNode.IsOnline {
-		log.Printf("DEBUG: Node %s already exists and is online, skipping", nodeID)
+	if nodeExists {
+		// Update existing node WITHOUT changing gossip address
+		nd.nodesMutex.Lock()
+		existingNode.IsOnline = true
+		existingNode.LastSeen = time.Now()
+		existingNode.Version = verResp.Version
+		existingNode.Status = "online"
 		
-		// But still store in allNodesByIP if this is a different IP
+		// Only update pubkey if we didn't have one before
+		if existingNode.Pubkey == "" && pubkey != "" {
+			existingNode.Pubkey = pubkey
+			existingNode.IsRegistered = nd.registration.IsRegistered(pubkey)
+			existingNode.ID = pubkey
+			nd.knownNodes[pubkey] = existingNode
+			delete(nd.knownNodes, nodeID)
+		}
+		
+		// Add RPC address to addresses array if not already there
+		hasRPC := false
+		for i := range existingNode.Addresses {
+			if existingNode.Addresses[i].Type == "rpc" {
+				existingNode.Addresses[i].LastSeen = time.Now()
+				existingNode.Addresses[i].IsWorking = true
+				hasRPC = true
+				break
+			}
+		}
+		if !hasRPC {
+			existingNode.Addresses = append(existingNode.Addresses, models.NodeAddress{
+				Address:   address,
+				IP:        host,
+				Port:      port,
+				Type:      "rpc",
+				LastSeen:  time.Now(),
+				IsWorking: true,
+			})
+		}
+		nd.nodesMutex.Unlock()
+		
 		nd.allNodesMutex.Lock()
-		if _, ipAlreadyTracked := nd.allNodesByIP[host]; !ipAlreadyTracked {
+		if _, tracked := nd.allNodesByIP[host]; !tracked {
 			nd.allNodesByIP[host] = existingNode
 		}
 		nd.allNodesMutex.Unlock()
 		return
 	}
 
-	// Create or update node
+	// Create new node - this should rarely happen since createNodeFromPod runs first
 	newNode := &models.Node{
 		ID:               nodeID,
 		Pubkey:           pubkey,
-		Address:          address,
+		Address:          address, // Temporary, will be updated by updateNodeFromPod
 		IP:               host,
 		Port:             port,
 		Version:          verResp.Version,
@@ -574,83 +606,35 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 			},
 		},
 	}
-	
-	// If node existed as offline, preserve FirstSeen timestamp
-	if nodeExists {
-		newNode.FirstSeen = existingNode.FirstSeen
-		newNode.CallHistory = existingNode.CallHistory
-		newNode.TotalCalls = existingNode.TotalCalls + 1
-		newNode.SuccessCalls = existingNode.SuccessCalls + 1
-	}
 
-	// Version status
 	versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
 	newNode.VersionStatus = versionStatus
 	newNode.IsUpgradeNeeded = needsUpgrade
 	newNode.UpgradeSeverity = severity
 	newNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
 
-	// Get stats
-	statsResp, err := nd.prpc.GetStats(address)
-	if err == nil {
-		nd.updateStats(newNode, statsResp)
-	}
-
-	// GeoIP
 	country, city, lat, lon := nd.geo.Lookup(host)
 	newNode.Country = country
 	newNode.City = city
 	newNode.Lat = lat
 	newNode.Lon = lon
 
-	// Store in BOTH maps
 	nd.nodesMutex.Lock()
 	nd.knownNodes[nodeID] = newNode
 	nd.nodesMutex.Unlock()
 
-	// CRITICAL: Always store by IP address
 	nd.allNodesMutex.Lock()
 	nd.allNodesByIP[host] = newNode
 	nd.allNodesMutex.Unlock()
 
-	// Add to IP index (or update if it was offline before)
 	nd.ipMutex.Lock()
-	if !nodeExists {
-		nd.ipToNodes[host] = append(nd.ipToNodes[host], newNode)
-	} else {
-		// Update reference in IP index
-		for i, n := range nd.ipToNodes[host] {
-			if n.ID == nodeID {
-				nd.ipToNodes[host][i] = newNode
-				break
-			}
-		}
-	}
+	nd.ipToNodes[host] = append(nd.ipToNodes[host], newNode)
 	nd.ipMutex.Unlock()
 
-	// Enrich with credits if we have pubkey
 	if pubkey != "" {
 		nd.enrichNodeWithCredits(newNode)
 	}
 
-	log.Printf("Discovered node: %s (%s, %s) [pubkey: %s, registered: %v, status: online → %s]", 
-		address, country, verResp.Version, 
-		func() string { 
-			if pubkey != "" { 
-				return pubkey[:8] + "..." 
-			} else { 
-				return "pending" 
-			} 
-		}(),
-		newNode.IsRegistered,
-		func() string {
-			if nodeExists {
-				return "was offline"
-			}
-			return "new"
-		}())
-
-	// Discover peers asynchronously (will help find more pubkeys)
 	go nd.discoverPeersFromNode(address)
 }
 
@@ -658,70 +642,34 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 
 
 
-// func (nd *NodeDiscovery) createOfflineNode(address, host string, port int, pubkey string) {
-// 	//nodeKey := makeNodeKey(pubkey, host)
-// 	nodeID := address
-// 	if pubkey != "" {
-// 		nodeID = pubkey
-// 	}
 
-// 	offlineNode := &models.Node{
-// 		ID:               nodeID,
-// 		Pubkey:           pubkey,
-// 		Address:          address,
-// 		IP:               host,
-// 		Port:             port,
-// 		Version:          "unknown",
-// 		IsOnline:         false,
-// 		IsRegistered:     nd.registration.IsRegistered(pubkey),
-// 		FirstSeen:        time.Now(),
-// 		LastSeen:         time.Now().Add(-10 * time.Minute),
-// 		Status:           "offline",
-// 		UptimeScore:      0,
-// 		PerformanceScore: 0,
-// 		CallHistory:      make([]bool, 0),
-// 		SuccessCalls:     0,
-// 		TotalCalls:       1,
-// 		Addresses: []models.NodeAddress{
-// 			{
-// 				Address:   address,
-// 				IP:        host,
-// 				Port:      port,
-// 				Type:      "rpc",
-// 				LastSeen:  time.Now(),
-// 				IsWorking: false,
-// 			},
-// 		},
-// 	}
-	
-// 	country, city, lat, lon := nd.geo.Lookup(host)
-// 	offlineNode.Country = country
-// 	offlineNode.City = city
-// 	offlineNode.Lat = lat
-// 	offlineNode.Lon = lon
-	
-// 	offlineNode.VersionStatus = "unknown"
-// 	offlineNode.IsUpgradeNeeded = false
-// 	offlineNode.UpgradeSeverity = "none"
-// 	offlineNode.UpgradeMessage = ""
-	
-// 	nd.nodesMutex.Lock()
-// 	nd.knownNodes[nodeID] = offlineNode
-// 	nd.nodesMutex.Unlock()
-	
-// 	// if pubkey != "" {
-// 	// 	nd.pubkeyMutex.Lock()
-// 	// 	nd.pubkeyToNodes[pubkey] = append(nd.pubkeyToNodes[pubkey], offlineNode)
-// 	// 	nd.pubkeyMutex.Unlock()
-// 	// }
-	
-// 	nd.ipMutex.Lock()
-// 	nd.ipToNodes[host] = append(nd.ipToNodes[host], offlineNode)
-// 	nd.ipMutex.Unlock()
-	
-// 	log.Printf("Tracked offline node: %s (%s, registered: %v) - will retry in health checks", 
-// 		address, country, offlineNode.IsRegistered)
-// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -829,91 +777,6 @@ func (nd *NodeDiscovery) findPubkeyForIP(targetIP string) string {
 
 	return ""
 }
-
-// func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
-// 	nd.rateLimiter <- struct{}{}
-// 	defer func() { <-nd.rateLimiter }()
-
-// 	podsResp, err := nd.prpc.GetPods(address)
-// 	if err != nil {
-// 		return
-// 	}
-
-// 	log.Printf("DEBUG: Got %d pods from %s", len(podsResp.Pods), address)
-
-// 	for _, pod := range podsResp.Pods {
-// 		nd.createNodeFromPod(&pod)
-// 	}
-
-// 	for _, pod := range podsResp.Pods {
-// 		if pod.Pubkey == "" {
-// 			continue
-// 		}
-
-// 		podHost, _, err := net.SplitHostPort(pod.Address)
-// 		if err != nil {
-// 			podHost = pod.Address
-// 		}
-
-// 		nd.matchPodToNode(pod, podHost)
-// 	}
-
-// 	verificationCount := 0
-// 	for _, pod := range podsResp.Pods {
-// 		podHost, _, err := net.SplitHostPort(pod.Address)
-// 		if err != nil {
-// 			podHost = pod.Address
-// 		}
-
-// 		var rpcAddress string
-// 		if pod.RpcPort > 0 {
-// 			rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
-// 		} else {
-// 			rpcAddress = net.JoinHostPort(podHost, "6000")
-// 		}
-
-// 		if rpcAddress == address {
-// 			continue
-// 		}
-
-// 		//nodeKey := makeNodeKey(pod.Pubkey, podHost)
-// 		nodeID := rpcAddress
-// 		if pod.Pubkey != "" {
-// 			nodeID = pod.Pubkey
-// 		}
-
-// 		nd.nodesMutex.RLock()
-// 		existingNode, exists := nd.knownNodes[nodeID]
-// 		nd.nodesMutex.RUnlock()
-
-// 		shouldVerify := !exists || 
-// 			existingNode.IsPublic || 
-// 			time.Since(existingNode.LastSeen) < 5*time.Minute
-
-// 		if shouldVerify && verificationCount < 50 {
-// 			go func(addr string) {
-// 				time.Sleep(100 * time.Millisecond)
-// 				nd.processNodeAddress(addr)
-// 			}(rpcAddress)
-// 			verificationCount++
-// 		}
-// 	}
-
-// 	log.Printf("DEBUG: Peer discovery from %s - created/updated %d nodes, verifying %d connections", 
-// 		address, len(podsResp.Pods), verificationCount)
-// }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1048,47 +911,6 @@ func (nd *NodeDiscovery) matchPodToNode(pod models.Pod, podIP string) {
 	}
 }
 
-// func (nd *NodeDiscovery) discoverPeers() {
-// 	nodes := nd.GetNodes()
-	
-// 	onlineNodes := make([]*models.Node, 0)
-// 	for _, node := range nodes {
-// 		if node.IsOnline && node.Status == "online" {
-// 			onlineNodes = append(onlineNodes, node)
-// 		}
-// 	}
-	
-// 	log.Printf("Starting peer discovery from %d online nodes", len(onlineNodes))
-	
-// 	maxNodesToQuery := 10
-// 	if len(onlineNodes) > maxNodesToQuery {
-// 		onlineNodes = onlineNodes[:maxNodesToQuery]
-// 	}
-	
-// 	var wg sync.WaitGroup
-// 	for _, node := range onlineNodes {
-// 		wg.Add(1)
-// 		go func(n *models.Node) {
-// 			defer wg.Done()
-// 			nd.discoverPeersFromNode(n.Address)
-// 		}(node)
-// 		time.Sleep(200 * time.Millisecond)
-// 	}
-	
-// 	wg.Wait()
-	
-// 	nd.nodesMutex.RLock()
-// 	totalNodes := len(nd.knownNodes)
-// 	nd.nodesMutex.RUnlock()
-	
-// 	// nd.pubkeyMutex.RLock()
-// 	// totalPods := len(nd.pubkeyToNodes)
-// 	// nd.pubkeyMutex.RUnlock()
-	
-// 	log.Printf("Peer discovery complete. Total nodes (IPs): %d, Total pods (pubkeys): %d", 
-// 		totalNodes)
-// }
-
 func (nd *NodeDiscovery) collectStats() {
 	nodes := nd.GetNodes()
 
@@ -1209,7 +1031,124 @@ func (nd *NodeDiscovery) updateStats(node *models.Node, stats *models.StatsRespo
 	}
 }
 
+// func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
+// 	if pod.Pubkey != "" {
+// 		node.Pubkey = pod.Pubkey
+// 		node.IsRegistered = nd.registration.IsRegistered(pod.Pubkey)
+// 	}
+	
+// 	node.IsPublic = pod.IsPublic
+	
+// 	if pod.Version != "" {
+// 		node.Version = pod.Version
+		
+// 		versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(pod.Version, nil)
+// 		node.VersionStatus = versionStatus
+// 		node.IsUpgradeNeeded = needsUpgrade
+// 		node.UpgradeSeverity = severity
+// 		node.UpgradeMessage = utils.GetUpgradeMessage(pod.Version, nil)
+// 	}
+	
+// 	if pod.StorageCommitted > 0 {
+// 		node.StorageCapacity = pod.StorageCommitted
+// 		node.StorageUsed = pod.StorageUsed
+// 		node.StorageUsagePercent = pod.StorageUsagePercent
+// 	}
+	
+// 	if pod.Uptime > 0 {
+// 		node.UptimeSeconds = pod.Uptime
+		
+// 		knownDuration := time.Since(node.FirstSeen).Seconds()
+// 		if knownDuration > 0 {
+// 			ratio := float64(pod.Uptime) / knownDuration
+// 			if ratio > 1 {
+// 				ratio = 1
+// 			}
+// 			node.UptimeScore = ratio * 100
+// 		} else {
+// 			node.UptimeScore = 100
+// 		}
+// 	}
+	
+// 	if pod.LastSeenTimestamp > 0 {
+// 		podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
+		
+// 		if podLastSeen.After(node.LastSeen) {
+// 			node.LastSeen = podLastSeen
+			
+// 			if time.Since(podLastSeen) < 2*time.Minute {
+// 				node.IsOnline = true
+// 			}
+// 		}
+// 	}
+	
+// 	if pod.RpcPort > 0 && pod.RpcPort != node.Port {
+// 		node.Port = pod.RpcPort
+// 		node.Address = net.JoinHostPort(node.IP, strconv.Itoa(pod.RpcPort))
+		
+// 		found := false
+// 		for i := range node.Addresses {
+// 			if node.Addresses[i].IP == node.IP {
+// 				node.Addresses[i].Port = pod.RpcPort
+// 				node.Addresses[i].Address = node.Address
+// 				node.Addresses[i].LastSeen = time.Now()
+// 				found = true
+// 				break
+// 			}
+// 		}
+// 		if !found {
+// 			node.Addresses = append(node.Addresses, models.NodeAddress{
+// 				Address:   node.Address,
+// 				IP:        node.IP,
+// 				Port:      pod.RpcPort,
+// 				Type:      "rpc",
+// 				LastSeen:  time.Now(),
+// 				IsWorking: node.IsOnline,
+// 				IsPublic:  pod.IsPublic,
+// 			})
+// 		}
+// 	}
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
+	// Extract gossip info from pod
+	podHost, gossipPortStr, err := net.SplitHostPort(pod.Address)
+	if err != nil {
+		podHost = pod.Address
+		gossipPortStr = "0"
+	}
+	gossipPort, _ := strconv.Atoi(gossipPortStr)
+	
 	if pod.Pubkey != "" {
 		node.Pubkey = pod.Pubkey
 		node.IsRegistered = nd.registration.IsRegistered(pod.Pubkey)
@@ -1219,7 +1158,6 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 	
 	if pod.Version != "" {
 		node.Version = pod.Version
-		
 		versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(pod.Version, nil)
 		node.VersionStatus = versionStatus
 		node.IsUpgradeNeeded = needsUpgrade
@@ -1235,7 +1173,6 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 	
 	if pod.Uptime > 0 {
 		node.UptimeSeconds = pod.Uptime
-		
 		knownDuration := time.Since(node.FirstSeen).Seconds()
 		if knownDuration > 0 {
 			ratio := float64(pod.Uptime) / knownDuration
@@ -1250,43 +1187,87 @@ func (nd *NodeDiscovery) updateNodeFromPod(node *models.Node, pod *models.Pod) {
 	
 	if pod.LastSeenTimestamp > 0 {
 		podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
-		
 		if podLastSeen.After(node.LastSeen) {
 			node.LastSeen = podLastSeen
-			
 			if time.Since(podLastSeen) < 2*time.Minute {
 				node.IsOnline = true
 			}
 		}
 	}
 	
-	if pod.RpcPort > 0 && pod.RpcPort != node.Port {
-		node.Port = pod.RpcPort
-		node.Address = net.JoinHostPort(node.IP, strconv.Itoa(pod.RpcPort))
-		
-		found := false
-		for i := range node.Addresses {
-			if node.Addresses[i].IP == node.IP {
-				node.Addresses[i].Port = pod.RpcPort
-				node.Addresses[i].Address = node.Address
-				node.Addresses[i].LastSeen = time.Now()
-				found = true
-				break
+	// CRITICAL: Only update primary address if we don't have a gossip address yet
+	// Check if current address looks like a gossip address (has unique port)
+	currentIsGossip := node.Port != 6000 && node.Port > 0
+	
+	if !currentIsGossip && gossipPort > 0 {
+		// We have RPC address but got gossip - upgrade to gossip
+		node.Address = pod.Address
+		node.Port = gossipPort
+	}
+	
+	// Update addresses array
+	// Check if we already have gossip address
+	hasGossip := false
+	hasRPC := false
+	
+	for i := range node.Addresses {
+		if node.Addresses[i].Type == "gossip" {
+			hasGossip = true
+			// Update gossip entry
+			if gossipPort > 0 {
+				node.Addresses[i].Address = pod.Address
+				node.Addresses[i].Port = gossipPort
+				node.Addresses[i].LastSeen = time.Unix(pod.LastSeenTimestamp, 0)
+				node.Addresses[i].IsPublic = pod.IsPublic
 			}
 		}
-		if !found {
-			node.Addresses = append(node.Addresses, models.NodeAddress{
-				Address:   node.Address,
-				IP:        node.IP,
-				Port:      pod.RpcPort,
-				Type:      "rpc",
-				LastSeen:  time.Now(),
-				IsWorking: node.IsOnline,
-				IsPublic:  pod.IsPublic,
-			})
+		if node.Addresses[i].Type == "rpc" {
+			hasRPC = true
 		}
 	}
+	
+	// Add gossip if missing
+	if !hasGossip && gossipPort > 0 {
+		node.Addresses = append([]models.NodeAddress{
+			{
+				Address:   pod.Address,
+				IP:        podHost,
+				Port:      gossipPort,
+				Type:      "gossip",
+				IsPublic:  pod.IsPublic,
+				LastSeen:  time.Unix(pod.LastSeenTimestamp, 0),
+				IsWorking: node.IsOnline,
+			},
+		}, node.Addresses...)
+	}
+	
+	// Add RPC if missing and different from gossip
+	if !hasRPC && pod.RpcPort > 0 && pod.RpcPort != gossipPort {
+		rpcAddress := net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
+		node.Addresses = append(node.Addresses, models.NodeAddress{
+			Address:   rpcAddress,
+			IP:        podHost,
+			Port:      pod.RpcPort,
+			Type:      "rpc",
+			IsPublic:  pod.IsPublic,
+			LastSeen:  time.Unix(pod.LastSeenTimestamp, 0),
+			IsWorking: node.IsOnline,
+		})
+	}
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func (nd *NodeDiscovery) enrichNodeWithCredits(node *models.Node) {
 	if nd.credits == nil || node.Pubkey == "" {
@@ -1312,81 +1293,205 @@ func (nd *NodeDiscovery) GetNodes() []*models.Node {
 	return nodes
 }
 
+
+
+
+
+
 // func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
-// 	podHost, _, err := net.SplitHostPort(pod.Address)
-// 	if err != nil {
-// 		podHost = pod.Address
-// 	}
+// 	// podHost, _, err := net.SplitHostPort(pod.Address)
+// 	// if err != nil {
+// 	// 	podHost = pod.Address
+// 	// }
 
-// 	var rpcAddress string
-// 	if pod.RpcPort > 0 {
-// 		rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
-// 	} else {
-// 		rpcAddress = net.JoinHostPort(podHost, "6000")
-// 	}
 
-// 	//nodeKey := makeNodeKey(pod.Pubkey, podHost)
-// 		nodeID := rpcAddress
-// 	if pod.Pubkey != "" {
-// 		nodeID = pod.Pubkey
-// 	}
 
-// 	nd.nodesMutex.Lock()
-// 	existingNode, exists := nd.knownNodes[nodeID]
-// 	nd.nodesMutex.Unlock()
+// 	// var rpcAddress string
+// 	// if pod.RpcPort > 0 {
+// 	// 	rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
+// 	// } else {
+// 	// 	rpcAddress = net.JoinHostPort(podHost, "6000")
+// 	// }
 
-// 	if exists {
-// 		nd.nodesMutex.Lock()
-// 		nd.updateNodeFromPod(existingNode, pod)
-// 		nd.nodesMutex.Unlock()
-// 		return
-// 	}
+// 	// nodeID := rpcAddress
+// 	// if pod.Pubkey != "" {
+// 	// 	nodeID = pod.Pubkey
+// 	// }
 
-// 	now := time.Now()
-// 	podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
+// 	// // Check if we already have this IP
+// 	// nd.allNodesMutex.RLock()
+// 	// _, ipExists := nd.allNodesByIP[podHost]
+// 	// nd.allNodesMutex.RUnlock()
+
+// 	// nd.nodesMutex.Lock()
+// 	// existingNode, exists := nd.knownNodes[nodeID]
+// 	// nd.nodesMutex.Unlock()
+
+// 	// if exists {
+// 	// 	nd.nodesMutex.Lock()
+// 	// 	nd.updateNodeFromPod(existingNode, pod)
+// 	// 	nd.nodesMutex.Unlock()
+		
+// 	// 	// Store in allNodesByIP if not already there
+// 	// 	if !ipExists {
+// 	// 		nd.allNodesMutex.Lock()
+// 	// 		nd.allNodesByIP[podHost] = existingNode
+// 	// 		nd.allNodesMutex.Unlock()
+// 	// 	}
+// 	// 	return
+// 	// }
+
+// 	// // Create new node from pod data
+// 	// now := time.Now()
+// 	// podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
 	
-// 	isOnline := time.Since(podLastSeen) < 5*time.Minute
-// 	status := "offline"
-// 	if isOnline {
-// 		status = "online"
-// 	}
+// 	// // Determine if node is likely online based on last seen
+// 	// isOnline := time.Since(podLastSeen) < 5*time.Minute
+// 	// status := "offline"
+// 	// if isOnline {
+// 	// 	status = "online"
+// 	// }
 
-// 	newNode := &models.Node{
-// 		ID:               nodeID,
-// 		Pubkey:           pod.Pubkey,
-// 		Address:          rpcAddress,
-// 		IP:               podHost,
-// 		Port:             pod.RpcPort,
-// 		Version:          pod.Version,
-// 		IsOnline:         isOnline,
-// 		IsPublic:         pod.IsPublic,
-// 		IsRegistered:     nd.registration.IsRegistered(pod.Pubkey),
-// 		FirstSeen:        now,
-// 		LastSeen:         podLastSeen,
-// 		Status:           status,
-// 		UptimeScore:      0,
-// 		PerformanceScore: 0,
-// 		CallHistory:      make([]bool, 0),
-// 		StorageCapacity:  pod.StorageCommitted,
-// 		StorageUsed:      pod.StorageUsed,
-// 		UptimeSeconds:    pod.Uptime,
-// 		Addresses: []models.NodeAddress{
-// 			{
-// 				Address:   rpcAddress,
-// 				IP:        podHost,
-// 				Port:      pod.RpcPort,
-// 				Type:      "rpc",
-// 				IsPublic:  pod.IsPublic,
-// 				LastSeen:  podLastSeen,
-// 				IsWorking: isOnline,
-// 			},
-// 		},
-// 	}
+// 	// newNode := &models.Node{
+// 	// 	ID:               nodeID,
+// 	// 	Pubkey:           pod.Pubkey,
+// 	// 	Address:          rpcAddress,
+// 	// 	IP:               podHost,
+// 	// 	Port:             pod.RpcPort,
+// 	// 	Version:          pod.Version,
+// 	// 	IsOnline:         isOnline,
+// 	// 	IsPublic:         pod.IsPublic,
+// 	// 	IsRegistered:     nd.registration.IsRegistered(pod.Pubkey),
+// 	// 	FirstSeen:        now,
+// 	// 	LastSeen:         podLastSeen,
+// 	// 	Status:           status,
+// 	// 	UptimeScore:      0,
+// 	// 	PerformanceScore: 0,
+// 	// 	CallHistory:      make([]bool, 0),
+// 	// 	StorageCapacity:  pod.StorageCommitted,
+// 	// 	StorageUsed:      pod.StorageUsed,
+// 	// 	UptimeSeconds:    pod.Uptime,
+// 	// 	Addresses: []models.NodeAddress{
+// 	// 		{
+// 	// 			Address:   rpcAddress,
+// 	// 			IP:        podHost,
+// 	// 			Port:      pod.RpcPort,
+// 	// 			Type:      "rpc",
+// 	// 			IsPublic:  pod.IsPublic,
+// 	// 			LastSeen:  podLastSeen,
+// 	// 			IsWorking: isOnline,
+// 	// 		},
+// 	// 	},
+// 	// }
+// 	// Extract gossip address info
 
+
+
+//     podHost, gossipPortStr, err := net.SplitHostPort(pod.Address)
+//     if err != nil {
+//         podHost = pod.Address
+//         gossipPortStr = "0"
+//     }
+//     gossipPort, _ := strconv.Atoi(gossipPortStr)
+
+//     // Construct RPC address
+//     var rpcAddress string
+//     var rpcPort int
+//     if pod.RpcPort > 0 {
+//         rpcPort = pod.RpcPort
+//         rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
+//     } else {
+//         rpcPort = 6000
+//         rpcAddress = net.JoinHostPort(podHost, "6000")
+//     }
+
+//     nodeID := rpcAddress
+//     if pod.Pubkey != "" {
+//         nodeID = pod.Pubkey
+//     }
+
+//     // Check if we already have this IP
+//     nd.allNodesMutex.RLock()
+//     _, ipExists := nd.allNodesByIP[podHost]
+//     nd.allNodesMutex.RUnlock()
+
+//     nd.nodesMutex.Lock()
+//     existingNode, exists := nd.knownNodes[nodeID]
+//     nd.nodesMutex.Unlock()
+
+//     if exists {
+//         nd.nodesMutex.Lock()
+//         nd.updateNodeFromPod(existingNode, pod)
+//         nd.nodesMutex.Unlock()
+        
+//         if !ipExists {
+//             nd.allNodesMutex.Lock()
+//             nd.allNodesByIP[podHost] = existingNode
+//             nd.allNodesMutex.Unlock()
+//         }
+//         return
+//     }
+
+//     // Create new node
+//     now := time.Now()
+//     podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
+    
+//     isOnline := time.Since(podLastSeen) < 5*time.Minute
+//     status := "offline"
+//     if isOnline {
+//         status = "online"
+//     }
+
+//     newNode := &models.Node{
+//         ID:               nodeID,
+//         Pubkey:           pod.Pubkey,
+//         Address:          pod.Address,        // ← CHANGED: Use gossip address for display
+//         IP:               podHost,
+//         Port:             gossipPort,         // ← CHANGED: Use gossip port for display
+//         Version:          pod.Version,
+//         IsOnline:         isOnline,
+//         IsPublic:         pod.IsPublic,
+//         IsRegistered:     nd.registration.IsRegistered(pod.Pubkey),
+//         FirstSeen:        now,
+//         LastSeen:         podLastSeen,
+//         Status:           status,
+//         UptimeScore:      0,
+//         PerformanceScore: 0,
+//         CallHistory:      make([]bool, 0),
+//         StorageCapacity:  pod.StorageCommitted,
+//         StorageUsed:      pod.StorageUsed,
+//         UptimeSeconds:    pod.Uptime,
+//         Addresses: []models.NodeAddress{
+//             // GOSSIP address (for display)
+//             {
+//                 Address:   pod.Address,    // ← Original gossip address
+//                 IP:        podHost,
+//                 Port:      gossipPort,     // ← Gossip port
+//                 Type:      "gossip",       // ← Mark as gossip
+//                 IsPublic:  pod.IsPublic,
+//                 LastSeen:  podLastSeen,
+//                 IsWorking: isOnline,
+//             },
+//             // RPC address (for internal use)
+//             {
+//                 Address:   rpcAddress,     // ← RPC address
+//                 IP:        podHost,
+//                 Port:      rpcPort,        // ← RPC port (6000)
+//                 Type:      "rpc",          // ← Mark as RPC
+//                 IsPublic:  pod.IsPublic,
+//                 LastSeen:  podLastSeen,
+//                 IsWorking: isOnline,
+//             },
+//         },
+//     }
+
+// 	// Calculate uptime score from pod data
 // 	if pod.Uptime > 0 {
-// 		newNode.UptimeScore = 95.0
+// 		// Assume pod has been running for at least its uptime
+// 		newNode.UptimeScore = 95.0 // Default to high score for nodes in peer list
 // 	}
 
+// 	// Version status
 // 	if pod.Version != "" {
 // 		versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(pod.Version, nil)
 // 		newNode.VersionStatus = versionStatus
@@ -1395,29 +1500,33 @@ func (nd *NodeDiscovery) GetNodes() []*models.Node {
 // 		newNode.UpgradeMessage = utils.GetUpgradeMessage(pod.Version, nil)
 // 	}
 
+// 	// GeoIP
 // 	country, city, lat, lon := nd.geo.Lookup(podHost)
 // 	newNode.Country = country
 // 	newNode.City = city
 // 	newNode.Lat = lat
 // 	newNode.Lon = lon
 
+// 	// Calculate initial scores
 // 	utils.CalculateScore(newNode)
 // 	utils.DetermineStatus(newNode)
 
+// 	// Store node in knownNodes
 // 	nd.nodesMutex.Lock()
 // 	nd.knownNodes[nodeID] = newNode
 // 	nd.nodesMutex.Unlock()
 
-// 	// if pod.Pubkey != "" {
-// 	// 	nd.pubkeyMutex.Lock()
-// 	// 	nd.pubkeyToNodes[pod.Pubkey] = append(nd.pubkeyToNodes[pod.Pubkey], newNode)
-// 	// 	nd.pubkeyMutex.Unlock()
-// 	// }
+// 	// CRITICAL: Always store by IP
+// 	nd.allNodesMutex.Lock()
+// 	nd.allNodesByIP[podHost] = newNode
+// 	nd.allNodesMutex.Unlock()
 
+// 	// Add to IP index
 // 	nd.ipMutex.Lock()
 // 	nd.ipToNodes[podHost] = append(nd.ipToNodes[podHost], newNode)
 // 	nd.ipMutex.Unlock()
 
+// 	// Enrich with credits
 // 	if pod.Pubkey != "" {
 // 		nd.enrichNodeWithCredits(newNode)
 // 	}
@@ -1439,27 +1548,57 @@ func (nd *NodeDiscovery) GetNodes() []*models.Node {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Replace the createNodeFromPod function in backend/services/node_discovery.go
+// Starting around line 850
+
 func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
-	podHost, _, err := net.SplitHostPort(pod.Address)
+	podHost, gossipPortStr, err := net.SplitHostPort(pod.Address)
 	if err != nil {
 		podHost = pod.Address
+		gossipPortStr = "0"
 	}
-
-
+	gossipPort, _ := strconv.Atoi(gossipPortStr)
 
 	var rpcAddress string
+	var rpcPort int
 	if pod.RpcPort > 0 {
+		rpcPort = pod.RpcPort
 		rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
 	} else {
+		rpcPort = 6000
 		rpcAddress = net.JoinHostPort(podHost, "6000")
 	}
 
-	nodeID := rpcAddress
+	nodeID := pod.Address
 	if pod.Pubkey != "" {
 		nodeID = pod.Pubkey
 	}
 
-	// Check if we already have this IP
 	nd.allNodesMutex.RLock()
 	_, ipExists := nd.allNodesByIP[podHost]
 	nd.allNodesMutex.RUnlock()
@@ -1473,7 +1612,6 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		nd.updateNodeFromPod(existingNode, pod)
 		nd.nodesMutex.Unlock()
 		
-		// Store in allNodesByIP if not already there
 		if !ipExists {
 			nd.allNodesMutex.Lock()
 			nd.allNodesByIP[podHost] = existingNode
@@ -1482,23 +1620,46 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		return
 	}
 
-	// Create new node from pod data
 	now := time.Now()
 	podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
-	
-	// Determine if node is likely online based on last seen
 	isOnline := time.Since(podLastSeen) < 5*time.Minute
 	status := "offline"
 	if isOnline {
 		status = "online"
 	}
 
+	addresses := []models.NodeAddress{}
+	
+	if gossipPort > 0 {
+		addresses = append(addresses, models.NodeAddress{
+			Address:   pod.Address,
+			IP:        podHost,
+			Port:      gossipPort,
+			Type:      "gossip",
+			IsPublic:  pod.IsPublic,
+			LastSeen:  podLastSeen,
+			IsWorking: isOnline,
+		})
+	}
+	
+	if rpcPort != gossipPort && rpcPort > 0 {
+		addresses = append(addresses, models.NodeAddress{
+			Address:   rpcAddress,
+			IP:        podHost,
+			Port:      rpcPort,
+			Type:      "rpc",
+			IsPublic:  pod.IsPublic,
+			LastSeen:  podLastSeen,
+			IsWorking: isOnline,
+		})
+	}
+
 	newNode := &models.Node{
 		ID:               nodeID,
 		Pubkey:           pod.Pubkey,
-		Address:          rpcAddress,
+		Address:          pod.Address,
 		IP:               podHost,
-		Port:             pod.RpcPort,
+		Port:             gossipPort,
 		Version:          pod.Version,
 		IsOnline:         isOnline,
 		IsPublic:         pod.IsPublic,
@@ -1512,127 +1673,13 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		StorageCapacity:  pod.StorageCommitted,
 		StorageUsed:      pod.StorageUsed,
 		UptimeSeconds:    pod.Uptime,
-		Addresses: []models.NodeAddress{
-			{
-				Address:   rpcAddress,
-				IP:        podHost,
-				Port:      pod.RpcPort,
-				Type:      "rpc",
-				IsPublic:  pod.IsPublic,
-				LastSeen:  podLastSeen,
-				IsWorking: isOnline,
-			},
-		},
+		Addresses:        addresses,
 	}
-	// Extract gossip address info
 
-
-
-    // podHost, gossipPortStr, err := net.SplitHostPort(pod.Address)
-    // if err != nil {
-    //     podHost = pod.Address
-    //     gossipPortStr = "0"
-    // }
-    // gossipPort, _ := strconv.Atoi(gossipPortStr)
-
-    // // Construct RPC address
-    // var rpcAddress string
-    // var rpcPort int
-    // if pod.RpcPort > 0 {
-    //     rpcPort = pod.RpcPort
-    //     rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
-    // } else {
-    //     rpcPort = 6000
-    //     rpcAddress = net.JoinHostPort(podHost, "6000")
-    // }
-
-    // nodeID := rpcAddress
-    // if pod.Pubkey != "" {
-    //     nodeID = pod.Pubkey
-    // }
-
-    // // Check if we already have this IP
-    // nd.allNodesMutex.RLock()
-    // _, ipExists := nd.allNodesByIP[podHost]
-    // nd.allNodesMutex.RUnlock()
-
-    // nd.nodesMutex.Lock()
-    // existingNode, exists := nd.knownNodes[nodeID]
-    // nd.nodesMutex.Unlock()
-
-    // if exists {
-    //     nd.nodesMutex.Lock()
-    //     nd.updateNodeFromPod(existingNode, pod)
-    //     nd.nodesMutex.Unlock()
-        
-    //     if !ipExists {
-    //         nd.allNodesMutex.Lock()
-    //         nd.allNodesByIP[podHost] = existingNode
-    //         nd.allNodesMutex.Unlock()
-    //     }
-    //     return
-    // }
-
-    // // Create new node
-    // now := time.Now()
-    // podLastSeen := time.Unix(pod.LastSeenTimestamp, 0)
-    
-    // isOnline := time.Since(podLastSeen) < 5*time.Minute
-    // status := "offline"
-    // if isOnline {
-    //     status = "online"
-    // }
-
-    // newNode := &models.Node{
-    //     ID:               nodeID,
-    //     Pubkey:           pod.Pubkey,
-    //     Address:          pod.Address,        // ← CHANGED: Use gossip address for display
-    //     IP:               podHost,
-    //     Port:             gossipPort,         // ← CHANGED: Use gossip port for display
-    //     Version:          pod.Version,
-    //     IsOnline:         isOnline,
-    //     IsPublic:         pod.IsPublic,
-    //     IsRegistered:     nd.registration.IsRegistered(pod.Pubkey),
-    //     FirstSeen:        now,
-    //     LastSeen:         podLastSeen,
-    //     Status:           status,
-    //     UptimeScore:      0,
-    //     PerformanceScore: 0,
-    //     CallHistory:      make([]bool, 0),
-    //     StorageCapacity:  pod.StorageCommitted,
-    //     StorageUsed:      pod.StorageUsed,
-    //     UptimeSeconds:    pod.Uptime,
-    //     Addresses: []models.NodeAddress{
-    //         // GOSSIP address (for display)
-    //         {
-    //             Address:   pod.Address,    // ← Original gossip address
-    //             IP:        podHost,
-    //             Port:      gossipPort,     // ← Gossip port
-    //             Type:      "gossip",       // ← Mark as gossip
-    //             IsPublic:  pod.IsPublic,
-    //             LastSeen:  podLastSeen,
-    //             IsWorking: isOnline,
-    //         },
-    //         // RPC address (for internal use)
-    //         {
-    //             Address:   rpcAddress,     // ← RPC address
-    //             IP:        podHost,
-    //             Port:      rpcPort,        // ← RPC port (6000)
-    //             Type:      "rpc",          // ← Mark as RPC
-    //             IsPublic:  pod.IsPublic,
-    //             LastSeen:  podLastSeen,
-    //             IsWorking: isOnline,
-    //         },
-    //     },
-    // }
-
-	// Calculate uptime score from pod data
 	if pod.Uptime > 0 {
-		// Assume pod has been running for at least its uptime
-		newNode.UptimeScore = 95.0 // Default to high score for nodes in peer list
+		newNode.UptimeScore = 95.0
 	}
 
-	// Version status
 	if pod.Version != "" {
 		versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(pod.Version, nil)
 		newNode.VersionStatus = versionStatus
@@ -1641,40 +1688,93 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		newNode.UpgradeMessage = utils.GetUpgradeMessage(pod.Version, nil)
 	}
 
-	// GeoIP
 	country, city, lat, lon := nd.geo.Lookup(podHost)
 	newNode.Country = country
 	newNode.City = city
 	newNode.Lat = lat
 	newNode.Lon = lon
 
-	// Calculate initial scores
 	utils.CalculateScore(newNode)
 	utils.DetermineStatus(newNode)
 
-	// Store node in knownNodes
 	nd.nodesMutex.Lock()
 	nd.knownNodes[nodeID] = newNode
 	nd.nodesMutex.Unlock()
 
-	// CRITICAL: Always store by IP
 	nd.allNodesMutex.Lock()
 	nd.allNodesByIP[podHost] = newNode
 	nd.allNodesMutex.Unlock()
 
-	// Add to IP index
 	nd.ipMutex.Lock()
 	nd.ipToNodes[podHost] = append(nd.ipToNodes[podHost], newNode)
 	nd.ipMutex.Unlock()
 
-	// Enrich with credits
 	if pod.Pubkey != "" {
 		nd.enrichNodeWithCredits(newNode)
 	}
 
-	log.Printf("Created node from pod: %s (%s, %s, public=%v, registered=%v, status=%s)", 
-		rpcAddress, country, pod.Version, pod.IsPublic, newNode.IsRegistered, status)
+	log.Printf("Created node from pod: %s (gossip: %s, rpc: %s, %s, %s, public=%v, registered=%v, status=%s)", 
+		nodeID, pod.Address, rpcAddress, country, pod.Version, pod.IsPublic, newNode.IsRegistered, status)
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1744,6 +1844,132 @@ func (nd *NodeDiscovery) GetNodeCounts() (totalIPs int, uniquePubkeys int) {
 
 
 
+// func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
+// 	nd.rateLimiter <- struct{}{}
+// 	defer func() { <-nd.rateLimiter }()
+
+// 	podsResp, err := nd.prpc.GetPods(address)
+// 	if err != nil {
+// 		return
+// 	}
+
+// 	log.Printf("DEBUG: Got %d pods from %s", len(podsResp.Pods), address)
+
+// 	// CRITICAL FIX: First create/update ALL nodes from pod data
+// 	// This ensures we have correct is_public flags and other metadata
+// 	for _, pod := range podsResp.Pods {
+// 		nd.createNodeFromPod(&pod)
+// 	}
+
+// 	// Second pass: Match pods to existing nodes by pubkey
+// 	for _, pod := range podsResp.Pods {
+// 		if pod.Pubkey == "" {
+// 			continue
+// 		}
+
+// 		podHost, _, err := net.SplitHostPort(pod.Address)
+// 		if err != nil {
+// 			podHost = pod.Address
+// 		}
+
+// 		nd.matchPodToNode(pod, podHost)
+// 	}
+
+// 	// Third pass: Verify connectivity for nodes we haven't connected to yet
+// 	// Only attempt for nodes marked as public or recently seen
+// 	verificationCount := 0
+// 	for _, pod := range podsResp.Pods {
+// 		podHost, _, err := net.SplitHostPort(pod.Address)
+// 		if err != nil {
+// 			podHost = pod.Address
+// 		}
+
+// 		var rpcAddress string
+// 		if pod.RpcPort > 0 {
+// 			rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
+// 		} else {
+// 			rpcAddress = net.JoinHostPort(podHost, "6000")
+// 		}
+// // 		go func(addr string) {
+// //     time.Sleep(100 * time.Millisecond)
+// //     nd.processNodeAddress(addr)  // ← This should use RPC address
+// // }(rpcAddress)
+
+// 		// Skip self
+// 		if rpcAddress == address {
+// 			continue
+// 		}
+
+// 		nodeID := rpcAddress
+// 		if pod.Pubkey != "" {
+// 			nodeID = pod.Pubkey
+// 		}
+
+// 		nd.nodesMutex.RLock()
+// 		existingNode, exists := nd.knownNodes[nodeID]
+// 		nd.nodesMutex.RUnlock()
+
+// 		// Only verify if:
+// 		// 1. Public node, OR
+// 		// 2. Recently seen (within 5 minutes), OR
+// 		// 3. Node doesn't exist yet
+// 		shouldVerify := !exists || 
+// 			existingNode.IsPublic || 
+// 			time.Since(existingNode.LastSeen) < 5*time.Minute
+
+// 		if shouldVerify && verificationCount < 50 { // Limit verification attempts
+// 			go func(addr string) {
+// 				time.Sleep(100 * time.Millisecond)
+// 				nd.processNodeAddress(addr)
+// 			}(rpcAddress)
+// 			verificationCount++
+// 		}
+// 	}
+
+// 	log.Printf("DEBUG: Peer discovery from %s - created/updated %d nodes, verifying %d connections", 
+// 		address, len(podsResp.Pods), verificationCount)
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
 	nd.rateLimiter <- struct{}{}
 	defer func() { <-nd.rateLimiter }()
@@ -1755,8 +1981,7 @@ func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
 
 	log.Printf("DEBUG: Got %d pods from %s", len(podsResp.Pods), address)
 
-	// CRITICAL FIX: First create/update ALL nodes from pod data
-	// This ensures we have correct is_public flags and other metadata
+	// First pass: Create/update ALL nodes from pod data
 	for _, pod := range podsResp.Pods {
 		nd.createNodeFromPod(&pod)
 	}
@@ -1775,8 +2000,7 @@ func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
 		nd.matchPodToNode(pod, podHost)
 	}
 
-	// Third pass: Verify connectivity for nodes we haven't connected to yet
-	// Only attempt for nodes marked as public or recently seen
+	// Third pass: Verify connectivity using RPC address
 	verificationCount := 0
 	for _, pod := range podsResp.Pods {
 		podHost, _, err := net.SplitHostPort(pod.Address)
@@ -1784,43 +2008,37 @@ func (nd *NodeDiscovery) discoverPeersFromNode(address string) {
 			podHost = pod.Address
 		}
 
+		// Build RPC address for connectivity check
 		var rpcAddress string
 		if pod.RpcPort > 0 {
 			rpcAddress = net.JoinHostPort(podHost, strconv.Itoa(pod.RpcPort))
 		} else {
 			rpcAddress = net.JoinHostPort(podHost, "6000")
 		}
-// 		go func(addr string) {
-//     time.Sleep(100 * time.Millisecond)
-//     nd.processNodeAddress(addr)  // ← This should use RPC address
-// }(rpcAddress)
 
 		// Skip self
 		if rpcAddress == address {
 			continue
 		}
 
-		nodeID := rpcAddress
-		if pod.Pubkey != "" {
-			nodeID = pod.Pubkey
+		nodeID := pod.Pubkey
+		if nodeID == "" {
+			nodeID = pod.Address
 		}
 
 		nd.nodesMutex.RLock()
 		existingNode, exists := nd.knownNodes[nodeID]
 		nd.nodesMutex.RUnlock()
 
-		// Only verify if:
-		// 1. Public node, OR
-		// 2. Recently seen (within 5 minutes), OR
-		// 3. Node doesn't exist yet
+		// Only verify if public or recently seen
 		shouldVerify := !exists || 
 			existingNode.IsPublic || 
 			time.Since(existingNode.LastSeen) < 5*time.Minute
 
-		if shouldVerify && verificationCount < 50 { // Limit verification attempts
+		if shouldVerify && verificationCount < 50 {
 			go func(addr string) {
 				time.Sleep(100 * time.Millisecond)
-				nd.processNodeAddress(addr)
+				nd.processNodeAddress(addr)  // Uses RPC address for connection
 			}(rpcAddress)
 			verificationCount++
 		}
