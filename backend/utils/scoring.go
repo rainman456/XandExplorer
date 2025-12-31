@@ -7,158 +7,279 @@ import (
 	"xand/models"
 )
 
-func DetermineStatus(n *models.Node) {
-	lastSeen := time.Since(n.LastSeen)
-	justDiscovered := time.Since(n.FirstSeen) < 5*time.Minute
+// func DetermineStatus(n *models.Node) {
+// 	lastSeen := time.Since(n.LastSeen)
+// 	justDiscovered := time.Since(n.FirstSeen) < 5*time.Minute
 
-	// PRIORITY 1: Check RPC connectivity (direct evidence)
-	hasRecentRPCSuccess := false
-	recentRPCFailures := 0
-	totalAttempts := 0
+// 	// PRIORITY 1: Check RPC connectivity (direct evidence)
+// 	hasRecentRPCSuccess := false
+// 	recentRPCFailures := 0
+// 	totalAttempts := 0
 	
-	if len(n.CallHistory) > 0 {
-		// Look at last 5 attempts for better sample
-		lookback := 5
-		if len(n.CallHistory) < lookback {
-			lookback = len(n.CallHistory)
-		}
+// 	if len(n.CallHistory) > 0 {
+// 		// Look at last 5 attempts for better sample
+// 		lookback := 5
+// 		if len(n.CallHistory) < lookback {
+// 			lookback = len(n.CallHistory)
+// 		}
 		
-		for i := len(n.CallHistory) - lookback; i < len(n.CallHistory); i++ {
-			totalAttempts++
-			if n.CallHistory[i] {
-				hasRecentRPCSuccess = true
-			} else {
-				recentRPCFailures++
-			}
-		}
-	}
+// 		for i := len(n.CallHistory) - lookback; i < len(n.CallHistory); i++ {
+// 			totalAttempts++
+// 			if n.CallHistory[i] {
+// 				hasRecentRPCSuccess = true
+// 			} else {
+// 				recentRPCFailures++
+// 			}
+// 		}
+// 	}
 	
-	// CRITICAL: Calculate failure rate to detect network-wide issues
-	failureRate := 0.0
-	if totalAttempts > 0 {
-		failureRate = float64(recentRPCFailures) / float64(totalAttempts)
-	}
+// 	// CRITICAL: Calculate failure rate to detect network-wide issues
+// 	failureRate := 0.0
+// 	if totalAttempts > 0 {
+// 		failureRate = float64(recentRPCFailures) / float64(totalAttempts)
+// 	}
 	
-	// PRIORITY 2: Check gossip activity (indirect evidence)
-	// UPDATED: Gossip now happens every 1 second (changed from 120s)
-	// Full propagation should happen in < 2-5 minutes
-	hasRecentGossipActivity := lastSeen < 3*time.Minute  // More lenient for propagation
-	hasVeryRecentGossipActivity := lastSeen < 30*time.Second  // Much tighter for active nodes
+// 	// PRIORITY 2: Check gossip activity (indirect evidence)
+// 	// UPDATED: Gossip now happens every 1 second (changed from 120s)
+// 	// Full propagation should happen in < 2-5 minutes
+// 	hasRecentGossipActivity := lastSeen < 3*time.Minute  // More lenient for propagation
+// 	hasVeryRecentGossipActivity := lastSeen < 30*time.Second  // Much tighter for active nodes
 	
-	// === DECISION TREE (Conservative) ===
+// 	// === DECISION TREE (Conservative) ===
 	
-	// CASE 1: Never contacted via RPC - trust gossip data
-	// UPDATED: With 1-second gossip, stale data is more meaningful
-	if n.TotalCalls == 0 {
-		if lastSeen > 5*time.Minute {  // Stricter - gossip should update faster
-			n.Status = "offline"
-			n.IsOnline = false
-		} else if lastSeen > 2*time.Minute {
-			n.Status = "warning"
-			n.IsOnline = true
-		} else {
-			n.Status = "online"
-			n.IsOnline = true
-		}
-		return
-	}
+// 	// CASE 1: Never contacted via RPC - trust gossip data
+// 	// UPDATED: With 1-second gossip, stale data is more meaningful
+// 	if n.TotalCalls == 0 {
+// 		if lastSeen > 5*time.Minute {  // Stricter - gossip should update faster
+// 			n.Status = "offline"
+// 			n.IsOnline = false
+// 		} else if lastSeen > 2*time.Minute {
+// 			n.Status = "warning"
+// 			n.IsOnline = true
+// 		} else {
+// 			n.Status = "online"
+// 			n.IsOnline = true
+// 		}
+// 		return
+// 	}
 	
-	// CASE 2: Have RPC history - combine signals intelligently
+// 	// CASE 2: Have RPC history - combine signals intelligently
 	
-	// CLEARLY ONLINE: Recent RPC success (within last 5 attempts)
-	if hasRecentRPCSuccess && hasRecentGossipActivity {
-		n.Status = "online"
-		n.IsOnline = true
-		return
-	}
+// 	// CLEARLY ONLINE: Recent RPC success (within last 5 attempts)
+// 	if hasRecentRPCSuccess && hasRecentGossipActivity {
+// 		n.Status = "online"
+// 		n.IsOnline = true
+// 		return
+// 	}
 	
-	// CRITICAL FIX: If many RPC failures but recent gossip, trust gossip
-	// This handles network congestion during mass health checks
-	// High failure rate (>60%) suggests network issue, not node issue
-	if failureRate > 0.6 && hasVeryRecentGossipActivity {
-		// Network congestion likely - trust gossip
-		n.Status = "online"
-		n.IsOnline = true
-		return
-	}
+// 	// CRITICAL FIX: If many RPC failures but recent gossip, trust gossip
+// 	// This handles network congestion during mass health checks
+// 	// High failure rate (>60%) suggests network issue, not node issue
+// 	if failureRate > 0.6 && hasVeryRecentGossipActivity {
+// 		// Network congestion likely - trust gossip
+// 		n.Status = "online"
+// 		n.IsOnline = true
+// 		return
+// 	}
 	
-	// ONLINE BUT FIREWALLED: Gossip shows activity, but RPC fails
-	// This is common for nodes behind NAT/firewalls
-	// UPDATED: With 1-second gossip, 30 seconds of activity is very recent
-	if hasVeryRecentGossipActivity && lastSeen < 1*time.Minute {
-		if recentRPCFailures >= 3 {
-			// Consistently unreachable via RPC, but active in gossip
-			n.Status = "warning"
-			n.IsOnline = true
-		} else {
-			n.Status = "online"
-			n.IsOnline = true
-		}
-		return
-	}
+// 	// ONLINE BUT FIREWALLED: Gossip shows activity, but RPC fails
+// 	// This is common for nodes behind NAT/firewalls
+// 	// UPDATED: With 1-second gossip, 30 seconds of activity is very recent
+// 	if hasVeryRecentGossipActivity && lastSeen < 1*time.Minute {
+// 		if recentRPCFailures >= 3 {
+// 			// Consistently unreachable via RPC, but active in gossip
+// 			n.Status = "warning"
+// 			n.IsOnline = true
+// 		} else {
+// 			n.Status = "online"
+// 			n.IsOnline = true
+// 		}
+// 		return
+// 	}
 	
-	// POSSIBLE ONLINE: Moderate gossip activity (1-3 min)
-	// UPDATED: Tighter window due to faster gossip
-	if hasRecentGossipActivity && lastSeen < 3*time.Minute {
-		if recentRPCFailures >= 4 {
-			n.Status = "warning"
-			n.IsOnline = true
-		} else {
-			n.Status = "online"
-			n.IsOnline = true
-		}
-		return
-	}
+// 	// POSSIBLE ONLINE: Moderate gossip activity (1-3 min)
+// 	// UPDATED: Tighter window due to faster gossip
+// 	if hasRecentGossipActivity && lastSeen < 3*time.Minute {
+// 		if recentRPCFailures >= 4 {
+// 			n.Status = "warning"
+// 			n.IsOnline = true
+// 		} else {
+// 			n.Status = "online"
+// 			n.IsOnline = true
+// 		}
+// 		return
+// 	}
 	
-	// DEGRADING: Old gossip (3-5 min) + RPC failures
-	// UPDATED: Faster gossip means older timestamps are more significant
-	if lastSeen >= 3*time.Minute && lastSeen <= 5*time.Minute {
-		// Calculate overall failure rate
-		failureRate := 0.0
-		if len(n.CallHistory) > 0 {
-			failures := 0
-			for _, success := range n.CallHistory {
-				if !success {
-					failures++
-				}
-			}
-			failureRate = float64(failures) / float64(len(n.CallHistory))
-		}
+// 	// DEGRADING: Old gossip (3-5 min) + RPC failures
+// 	// UPDATED: Faster gossip means older timestamps are more significant
+// 	if lastSeen >= 3*time.Minute && lastSeen <= 5*time.Minute {
+// 		// Calculate overall failure rate
+// 		failureRate := 0.0
+// 		if len(n.CallHistory) > 0 {
+// 			failures := 0
+// 			for _, success := range n.CallHistory {
+// 				if !success {
+// 					failures++
+// 				}
+// 			}
+// 			failureRate = float64(failures) / float64(len(n.CallHistory))
+// 		}
 		
-		// Only mark offline if failure rate is very high
-		if failureRate > 0.8 {
-			n.Status = "offline"
-			n.IsOnline = false
-		} else {
-			n.Status = "warning"
-			n.IsOnline = true
-		}
-		return
-	}
+// 		// Only mark offline if failure rate is very high
+// 		if failureRate > 0.8 {
+// 			n.Status = "offline"
+// 			n.IsOnline = false
+// 		} else {
+// 			n.Status = "warning"
+// 			n.IsOnline = true
+// 		}
+// 		return
+// 	}
 	
-	// CLEARLY OFFLINE: No activity for 5+ minutes
-	// UPDATED: With 1-second gossip, 5 minutes is plenty of time for updates
-	if lastSeen > 5*time.Minute {
-		n.Status = "offline"
-		n.IsOnline = false
-		return
-	}
+// 	// CLEARLY OFFLINE: No activity for 5+ minutes
+// 	// UPDATED: With 1-second gossip, 5 minutes is plenty of time for updates
+// 	if lastSeen > 5*time.Minute {
+// 		n.Status = "offline"
+// 		n.IsOnline = false
+// 		return
+// 	}
 	
-	// For newly discovered nodes, be optimistic
-	if justDiscovered && lastSeen < 3*time.Minute {
-		n.Status = "online"
-		n.IsOnline = true
-		return
-	}
+// 	// For newly discovered nodes, be optimistic
+// 	if justDiscovered && lastSeen < 3*time.Minute {
+// 		n.Status = "online"
+// 		n.IsOnline = true
+// 		return
+// 	}
 	
-	// DEFAULT FALLBACK: If uncertain, prefer warning over offline
-	if lastSeen < 5*time.Minute {
-		n.Status = "warning"
-		n.IsOnline = true
-	} else {
-		n.Status = "offline"
-		n.IsOnline = false
-	}
+// 	// DEFAULT FALLBACK: If uncertain, prefer warning over offline
+// 	if lastSeen < 5*time.Minute {
+// 		n.Status = "warning"
+// 		n.IsOnline = true
+// 	} else {
+// 		n.Status = "offline"
+// 		n.IsOnline = false
+// 	}
+// }
+
+
+func DetermineStatus(n *models.Node) {
+    lastSeen := time.Since(n.LastSeen)
+    justDiscovered := time.Since(n.FirstSeen) < 5*time.Minute
+
+    // Base gossip thresholds: heartbeats ~30s, full propagation takes several minutes
+    hasVeryRecentGossip := lastSeen < 2*time.Minute    // Strong evidence of activity
+    hasRecentGossip := lastSeen < 8*time.Minute        // Reasonable window for propagation
+    hasStaleGossip := lastSeen > 15*time.Minute        // Likely offline if not seen this long
+
+    // RPC connectivity evidence
+    hasRecentRPCSuccess := false
+    recentFailures := 0
+    lookback := 5
+    if len(n.CallHistory) < lookback {
+        lookback = len(n.CallHistory)
+    }
+    startIdx := len(n.CallHistory) - lookback
+    if startIdx < 0 {
+        startIdx = 0
+    }
+    for i := startIdx; i < len(n.CallHistory); i++ {
+        if n.CallHistory[i] {
+            hasRecentRPCSuccess = true
+        } else {
+            recentFailures++
+        }
+    }
+
+    // Overall failure rate (for longer-term view)
+    overallFailureRate := 0.0
+    if len(n.CallHistory) > 0 {
+        failures := 0
+        for _, success := range n.CallHistory {
+            if !success {
+                failures++
+            }
+        }
+        overallFailureRate = float64(failures) / float64(len(n.CallHistory))
+    }
+
+    // === DECISION TREE ===
+
+    // Case 1: Never directly contacted — fully trust gossip data
+    if n.TotalCalls == 0 {
+        if hasStaleGossip {
+            n.Status = "offline"
+            n.IsOnline = false
+        } else if lastSeen > 8*time.Minute {
+            n.Status = "warning"
+            n.IsOnline = true
+        } else {
+            n.Status = "online"
+            n.IsOnline = true
+        }
+        return
+    }
+
+    // Case 2: We have direct RPC contact history
+
+    // Strong positive: Recent successful RPC + recent gossip → definitely online
+    if hasRecentRPCSuccess && hasRecentGossip {
+        n.Status = "online"
+        n.IsOnline = true
+        return
+    }
+
+    // Common case: Active in gossip but RPC unreachable (NAT/firewall)
+    // Trust gossip heavily — these nodes are healthy participants
+    if hasVeryRecentGossip {
+        n.Status = "warning" // or "online" if you prefer; warning is more accurate
+        n.IsOnline = true
+        return
+    }
+
+    if hasRecentGossip {
+        if recentFailures >= 4 && overallFailureRate > 0.7 {
+            n.Status = "warning"
+        } else {
+            n.Status = "online"
+        }
+        n.IsOnline = true
+        return
+    }
+
+    // Degrading: Gossip getting old + poor RPC history
+    if lastSeen >= 8*time.Minute && lastSeen <= 15*time.Minute {
+        if overallFailureRate > 0.8 {
+            n.Status = "offline"
+            n.IsOnline = false
+        } else {
+            n.Status = "warning"
+            n.IsOnline = true
+        }
+        return
+    }
+
+    // Clearly offline: No signs of life for 15+ minutes
+    if hasStaleGossip {
+        n.Status = "offline"
+        n.IsOnline = false
+        return
+    }
+
+    // New nodes: Be optimistic
+    if justDiscovered && hasRecentGossip {
+        n.Status = "online"
+        n.IsOnline = true
+        return
+    }
+
+    // Final fallback: Prefer warning over false offline
+    if lastSeen < 15*time.Minute {
+        n.Status = "warning"
+        n.IsOnline = true
+    } else {
+        n.Status = "offline"
+        n.IsOnline = false
+    }
 }
 
 // CalculateScore computes the node's performance score (0-100)
