@@ -44,17 +44,17 @@ type CacheService struct {
 	// In-memory fallback
 	inMemoryStore sync.Map
 
-		// NEW: Prevent concurrent refreshes
-	refreshing    sync.Mutex
-	lastRefresh   time.Time
-	stopChan      chan struct{}
+	// NEW: Prevent concurrent refreshes
+	refreshing  sync.Mutex
+	lastRefresh time.Time
+	stopChan    chan struct{}
 
 	//stopChan chan struct{}
 }
 
 func NewCacheService(cfg *config.Config, aggregator *DataAggregator) *CacheService {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	cs := &CacheService{
 		cfg:         cfg,
 		aggregator:  aggregator,
@@ -150,7 +150,7 @@ func (cs *CacheService) StartCacheWarmer() {
 func (cs *CacheService) Stop() {
 	close(cs.stopChan)
 	cs.redisCancel()
-	
+
 	if cs.redis != nil {
 		cs.redis.Close()
 	}
@@ -172,32 +172,24 @@ func (cs *CacheService) Stop() {
 // 	}
 // }
 
-
-
-
-
-
-
-
-
 // OPTIMIZED: Faster refresh loop with adaptive intervals
 func (cs *CacheService) runRefreshLoop() {
 	// Start with shorter interval, increase as network stabilizes
 	baseInterval := time.Duration(cs.cfg.Polling.StatsInterval) * time.Second
 	currentInterval := baseInterval
-	
+
 	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
-	
+
 	consecutiveSlowRefreshes := 0
-	
+
 	for {
 		select {
 		case <-ticker.C:
 			start := time.Now()
 			cs.Refresh()
 			elapsed := time.Since(start)
-			
+
 			// Adaptive interval based on performance
 			if elapsed > 10*time.Second {
 				consecutiveSlowRefreshes++
@@ -218,15 +210,12 @@ func (cs *CacheService) runRefreshLoop() {
 						elapsed, currentInterval)
 				}
 			}
-			
+
 		case <-cs.stopChan:
 			return
 		}
 	}
 }
-
-
-
 
 // runHealthCheckLoop monitors Redis health
 func (cs *CacheService) runHealthCheckLoop() {
@@ -269,12 +258,12 @@ func (cs *CacheService) checkRedisHealth() {
 // syncInMemoryToRedis copies in-memory cache to Redis on reconnection
 func (cs *CacheService) syncInMemoryToRedis() {
 	log.Println("Syncing in-memory cache to Redis...")
-	
+
 	synced := 0
 	cs.inMemoryStore.Range(func(key, value interface{}) bool {
 		keyStr := key.(string)
 		item := value.(*CacheItem)
-		
+
 		ttl := time.Until(item.ExpiresAt)
 		if ttl > 0 {
 			if err := cs.setRedis(keyStr, item.Data, ttl); err == nil {
@@ -283,19 +272,18 @@ func (cs *CacheService) syncInMemoryToRedis() {
 		}
 		return true
 	})
-	
+
 	log.Printf("Synced %d items to Redis", synced)
 }
-
 
 // REPLACE the Refresh function in services/cache.go
 
 // func (cs *CacheService) Refresh() {
 // 	start := time.Now()
-	
+
 // 	// CRITICAL FIX: Add mutex to prevent concurrent refreshes
 // 	// This ensures we get consistent snapshots
-	
+
 // 	// Get aggregated stats (this calls GetAllNodes internally)
 // 	stats := cs.aggregator.Aggregate()
 
@@ -320,15 +308,9 @@ func (cs *CacheService) syncInMemoryToRedis() {
 // 	}
 
 // 	elapsed := time.Since(start)
-// 	log.Printf("Cache refreshed (%s): %d online/%d total IPs, %d unique pubkeys | Mode: %s", 
+// 	log.Printf("Cache refreshed (%s): %d online/%d total IPs, %d unique pubkeys | Mode: %s",
 // 		elapsed, stats.OnlineNodes, len(allNodes), len(uniqueNodes), cs.getMode())
 // }
-
-
-
-
-
-
 
 func (cs *CacheService) Refresh() {
 	// Prevent concurrent refreshes
@@ -337,26 +319,26 @@ func (cs *CacheService) Refresh() {
 		return
 	}
 	defer cs.refreshing.Unlock()
-	
+
 	// Rate limit refreshes to once per 5 seconds minimum
 	if time.Since(cs.lastRefresh) < 5*time.Second {
 		log.Println("Cache refreshed too recently, skipping")
 		return
 	}
 	cs.lastRefresh = time.Now()
-	
+
 	start := time.Now()
-	
+
 	// Get snapshot WITHOUT recalculating status
 	stats := cs.aggregator.Aggregate()
 	allNodes := cs.aggregator.discovery.GetAllNodes()
 	uniqueNodes := cs.aggregator.discovery.GetNodes()
-	
+
 	ttl := time.Duration(cs.cfg.Cache.TTL) * time.Second
-	
+
 	// Update in parallel for speed
 	var wg sync.WaitGroup
-	
+
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
@@ -370,9 +352,9 @@ func (cs *CacheService) Refresh() {
 		defer wg.Done()
 		cs.Set("nodes:unique", uniqueNodes, ttl)
 	}()
-	
+
 	wg.Wait()
-	
+
 	// Update individual nodes in background (don't block)
 	go func() {
 		maxIndividual := 100
@@ -383,31 +365,11 @@ func (cs *CacheService) Refresh() {
 			cs.Set("node:"+n.ID, n, 60*time.Second)
 		}
 	}()
-	
+
 	elapsed := time.Since(start)
 	log.Printf("Cache refreshed in %s: %d IPs, %d pubkeys | Mode: %s",
 		elapsed, len(allNodes), len(uniqueNodes), cs.getMode())
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ============================================
 // Generic Set/Get with Redis + In-Memory
@@ -416,7 +378,7 @@ func (cs *CacheService) Refresh() {
 // Set stores data in the active cache backend
 func (cs *CacheService) Set(key string, data interface{}, ttl time.Duration) {
 	mode := cs.getMode()
-	
+
 	if mode == CacheModeRedis {
 		if err := cs.setRedis(key, data, ttl); err != nil {
 			log.Printf("Redis SET failed for '%s': %v (falling back to in-memory)", key, err)
@@ -430,7 +392,7 @@ func (cs *CacheService) Set(key string, data interface{}, ttl time.Duration) {
 // Get retrieves data from the active cache backend
 func (cs *CacheService) Get(key string) (interface{}, bool) {
 	mode := cs.getMode()
-	
+
 	if mode == CacheModeRedis {
 		data, found, err := cs.getRedis(key)
 		if err != nil {
@@ -439,24 +401,27 @@ func (cs *CacheService) Get(key string) (interface{}, bool) {
 		}
 		return data, found
 	}
-	
+
 	return cs.getInMemory(key)
 }
 
 // GetWithStale retrieves data and indicates if it's stale
 func (cs *CacheService) GetWithStale(key string) (interface{}, bool, bool) {
 	mode := cs.getMode()
-	
+
 	if mode == CacheModeRedis {
 		data, found, err := cs.getRedis(key)
 		if err != nil {
 			data, found := cs.getInMemory(key)
+			
 			return data, false, found
 		}
+		log.Printf("Redis GET failed for '%s': %v (falling back to in-memory)", key, err)
 		// Redis manages TTL, so if found, it's fresh
 		return data, false, found
+		
 	}
-	
+
 	return cs.getInMemoryWithStale(key)
 }
 
@@ -498,7 +463,7 @@ func (cs *CacheService) getRedis(key string) (interface{}, bool, error) {
 
 	// Deserialize based on key pattern
 	var data interface{}
-	
+
 	switch {
 	case key == "stats":
 		var stats models.NetworkStats
@@ -576,7 +541,7 @@ func (cs *CacheService) GetNetworkStats(allowStale bool) (*models.NetworkStats, 
 	if !allowStale && stale {
 		return nil, false, false
 	}
-	
+
 	if stats, ok := data.(models.NetworkStats); ok {
 		return &stats, stale, true
 	}
@@ -591,7 +556,7 @@ func (cs *CacheService) GetNodes(allowStale bool) ([]*models.Node, bool, bool) {
 	if !allowStale && stale {
 		return nil, false, false
 	}
-	
+
 	if nodes, ok := data.([]*models.Node); ok {
 		return nodes, stale, true
 	}
@@ -606,7 +571,7 @@ func (cs *CacheService) GetNode(id string, allowStale bool) (*models.Node, bool,
 	if !allowStale && stale {
 		return nil, false, false
 	}
-	
+
 	if node, ok := data.(*models.Node); ok {
 		return node, stale, true
 	}
@@ -623,11 +588,11 @@ func (cs *CacheService) GetCacheMode() CacheMode {
 
 func (cs *CacheService) ClearCache() error {
 	mode := cs.getMode()
-	
+
 	if mode == CacheModeRedis && cs.redis != nil {
 		ctx, cancel := context.WithTimeout(cs.redisCtx, 5*time.Second)
 		defer cancel()
-		
+
 		// Use SCAN to find and delete our keys
 		iter := cs.redis.Scan(ctx, 0, "node:*", 0).Iterator()
 		deleted := 0
@@ -635,15 +600,15 @@ func (cs *CacheService) ClearCache() error {
 			cs.redis.Del(ctx, iter.Val())
 			deleted++
 		}
-		
+
 		cs.redis.Del(ctx, "stats", "nodes")
 		log.Printf("Redis cache cleared (%d node keys deleted)", deleted)
 	}
-	
+
 	// Clear in-memory
 	cs.inMemoryStore = sync.Map{}
 	log.Println("In-memory cache cleared")
-	
+
 	return nil
 }
 
@@ -652,19 +617,19 @@ func (cs *CacheService) GetCacheStats() map[string]interface{} {
 		"mode":    string(cs.getMode()),
 		"enabled": cs.cfg.Redis.Enabled,
 	}
-	
+
 	mode := cs.getMode()
-	
+
 	if mode == CacheModeRedis && cs.redis != nil {
 		ctx, cancel := context.WithTimeout(cs.redisCtx, 2*time.Second)
 		defer cancel()
-		
+
 		dbSize, err := cs.redis.DBSize(ctx).Result()
 		if err == nil {
 			stats["redis_keys"] = dbSize
 		}
 	}
-	
+
 	// Count in-memory items
 	inMemCount := 0
 	cs.inMemoryStore.Range(func(_, _ interface{}) bool {
@@ -672,17 +637,13 @@ func (cs *CacheService) GetCacheStats() map[string]interface{} {
 		return true
 	})
 	stats["in_memory_keys"] = inMemCount
-	
+
 	return stats
 }
 
-
-
-
-
 func (cs *CacheService) RefreshWithBatch() {
 	start := time.Now()
-	
+
 	// Get aggregated stats
 	stats := cs.aggregator.Aggregate()
 	nodes := cs.aggregator.discovery.GetNodes()
@@ -712,6 +673,6 @@ func (cs *CacheService) RefreshWithBatch() {
 	}
 
 	elapsed := time.Since(start)
-	log.Printf("Cache refreshed (%s): %d nodes | Mode: %s", 
+	log.Printf("Cache refreshed (%s): %d nodes | Mode: %s",
 		elapsed, len(nodes), cs.getMode())
 }

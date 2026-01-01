@@ -127,7 +127,7 @@ func (nd *NodeDiscovery) runDiscoveryLoop() {
 			
 			nd.discoverPeers()
 			
-			if discoveryCount == 10 {
+			if discoveryCount == 5 {
 				ticker.Stop()
 				configInterval := time.Duration(nd.cfg.Polling.DiscoveryInterval) * time.Second
 				ticker = time.NewTicker(configInterval)
@@ -930,37 +930,97 @@ func (nd *NodeDiscovery) matchPodToNode(pod models.Pod, podIP string) {
 	}
 }
 
+// func (nd *NodeDiscovery) collectStats() {
+// 	nodes := nd.GetNodes()
+
+// 	for _, node := range nodes {
+// 		nd.rateLimiter <- struct{}{}
+
+// 		go func(n *models.Node) {
+// 			defer func() { <-nd.rateLimiter }()
+
+// 			statsResp, err := nd.prpc.GetStats(n.Address)
+// 			if err != nil {
+// 				return
+// 			}
+
+// 			nd.nodesMutex.Lock()
+// 			if storedNode, exists := nd.knownNodes[n.ID]; exists {
+// 				nd.updateStats(storedNode, statsResp)
+// 				storedNode.LastSeen = time.Now()
+// 				storedNode.IsOnline = true
+// 				utils.CalculateScore(storedNode)
+// 				utils.DetermineStatus(storedNode)
+// 			}
+// 			nd.nodesMutex.Unlock()
+
+// 			if n.Pubkey != "" {
+// 				nd.enrichNodeWithCredits(n)
+// 			}
+// 		}(node)
+// 	}
+
+// 	time.Sleep(2 * time.Second)
+// }
+
+
+
+
+
+
+
+
+
 func (nd *NodeDiscovery) collectStats() {
-	nodes := nd.GetNodes()
+    nodes := nd.GetNodes()
 
-	for _, node := range nodes {
-		nd.rateLimiter <- struct{}{}
+    // Use rate limiter to avoid overwhelming the network
+    for _, node := range nodes {
+        nd.rateLimiter <- struct{}{}
+        go func(n *models.Node) {
+            defer func() { <-nd.rateLimiter }()
 
-		go func(n *models.Node) {
-			defer func() { <-nd.rateLimiter }()
+            // CRITICAL FIX: Use the correct RPC address instead of n.Address
+            rpcAddr := nd.getRPCAddress(n)
 
-			statsResp, err := nd.prpc.GetStats(n.Address)
-			if err != nil {
-				return
-			}
+            statsResp, err := nd.prpc.GetStats(rpcAddr)
+            if err != nil {
+                // Optional: Log failures for debugging (remove in production if too noisy)
+                // log.Printf("Failed to get stats from %s (using RPC %s): %v", n.ID, rpcAddr, err)
+                return
+            }
 
-			nd.nodesMutex.Lock()
-			if storedNode, exists := nd.knownNodes[n.ID]; exists {
-				nd.updateStats(storedNode, statsResp)
-				storedNode.LastSeen = time.Now()
-				storedNode.IsOnline = true
-				utils.CalculateScore(storedNode)
-				utils.DetermineStatus(storedNode)
-			}
-			nd.nodesMutex.Unlock()
+            nd.nodesMutex.Lock()
+            if storedNode, exists := nd.knownNodes[n.ID]; exists {
+                nd.updateStats(storedNode, statsResp)
 
-			if n.Pubkey != "" {
-				nd.enrichNodeWithCredits(n)
-			}
-		}(node)
-	}
+                // Update common fields on success
+                storedNode.LastSeen = time.Now()
+                storedNode.IsOnline = true
 
-	time.Sleep(2 * time.Second)
+                // Mark the RPC address as working
+                for i := range storedNode.Addresses {
+                    if storedNode.Addresses[i].Type == "rpc" && storedNode.Addresses[i].Address == rpcAddr {
+                        storedNode.Addresses[i].IsWorking = true
+                        storedNode.Addresses[i].LastSeen = time.Now()
+                        break
+                    }
+                }
+
+                utils.CalculateScore(storedNode)
+                utils.DetermineStatus(storedNode)
+            }
+            nd.nodesMutex.Unlock()
+
+            // Enrich credits if pubkey exists (no RPC needed)
+            if n.Pubkey != "" {
+                nd.enrichNodeWithCredits(n)
+            }
+        }(node)
+    }
+
+    // Small sleep to allow goroutines to complete (optional, but helps batching)
+    time.Sleep(2 * time.Second)
 }
 
 

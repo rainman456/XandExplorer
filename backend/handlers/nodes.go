@@ -72,7 +72,7 @@ func (h *Handler) GetNodes(c echo.Context) error {
 
 	if !found {
 		// CHANGED: Get ALL nodes including duplicates
-		nodes = h.Discovery.GetAllNodes()
+		nodes = h.Discovery.GetNodes()
 	}
 
 	// Filter out incomplete nodes (no pubkey)

@@ -6,14 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// GetStats godoc
-// @Summary Get network statistics
-// @Description Returns comprehensive network statistics including node counts and health metrics
-// @Tags stats
-// @Produce json
-// @Success 200 {object} NetworkStatsResponse
-// @Failure 503 {object} ErrorResponse
-// @Router /api/stats [get]
+
 func (h *Handler) GetStats(c echo.Context) error {
 	// Try to get fresh stats first
 	stats, stale, found := h.Cache.GetNetworkStats(false)
@@ -34,37 +27,81 @@ func (h *Handler) GetStats(c echo.Context) error {
 		}
 	}
 
-	// Get all nodes to calculate public/private counts
+	// Get all nodes to calculate public/private counts AND aggregate RPC stats
 	nodes, _, nodesFound := h.Cache.GetNodes(true)
 	
 	var publicNodes, privateNodes int
+	
+	// Aggregate RPC stats from nodes (CPU, RAM, packets, uptime, etc.)
+	var totalCPU, totalRAMUsed, totalRAMTotal float64
+	var totalPacketsReceived, totalPacketsSent int64
+	var totalUptime int64
+	//var totalActiveStreams int
+	var nodesWithStats int
+	
 	if nodesFound {
 		for _, node := range nodes {
+			// Count public/private
 			if node.IsPublic {
 				publicNodes++
 			} else {
 				privateNodes++
 			}
+			
+			// Aggregate RPC stats (from get-stats calls stored in node)
+			if node.CPUPercent > 0 || node.RAMUsed > 0 {
+				totalCPU += node.CPUPercent
+				totalRAMUsed += float64(node.RAMUsed)
+				totalRAMTotal += float64(node.RAMTotal)
+				totalPacketsReceived += node.PacketsReceived
+				totalPacketsSent += node.PacketsSent
+				totalUptime += node.UptimeSeconds
+				nodesWithStats++
+			}
 		}
 	}
 
-	// Build enhanced response
+	// Calculate averages
+	var avgCPU, avgRAMUsed, avgRAMTotal, avgUptime float64
+	if nodesWithStats > 0 {
+		avgCPU = totalCPU / float64(nodesWithStats)
+		avgRAMUsed = totalRAMUsed / float64(nodesWithStats)
+		avgRAMTotal = totalRAMTotal / float64(nodesWithStats)
+		avgUptime = float64(totalUptime) / float64(nodesWithStats)
+	}
+
+	// Build enhanced response with BOTH aggregated metrics AND RPC stats
 	response := NetworkStatsResponse{
-		TotalNodes:                     stats.TotalNodes, // IP count
-		TotalPods:                      stats.TotalPods,  // Unique pubkeys
-		OnlineNodes:                    stats.OnlineNodes,
-		WarningNodes:                   stats.WarningNodes,
-		OfflineNodes:                   stats.OfflineNodes,
-		PublicNodes:                    publicNodes,
-		PrivateNodes:                   privateNodes,
+		// Node counts (from aggregation)
+		TotalNodes:   stats.TotalNodes,
+		TotalPods:    stats.TotalPods,
+		OnlineNodes:  stats.OnlineNodes,
+		WarningNodes: stats.WarningNodes,
+		OfflineNodes: stats.OfflineNodes,
+		PublicNodes:  publicNodes,
+		PrivateNodes: privateNodes,
+		
+		// Storage metrics (from aggregation)
 		TotalStorageBytes:              stats.TotalStorage,
 		UsedStorageBytes:               stats.UsedStorage,
 		AvgStorageCommittedPerPodBytes: stats.AvgStorageCommittedPerPodBytes,
-		AverageUptime:                  stats.AverageUptime,
-		AveragePerformance:             stats.AveragePerformance,
-		TotalStake:                     stats.TotalStake,
-		NetworkHealth:                  stats.NetworkHealth,
-		LastUpdated:                    stats.LastUpdated.String(),
+		
+		// Performance metrics (from aggregation)
+		AverageUptime:      stats.AverageUptime,
+		AveragePerformance: stats.AveragePerformance,
+		TotalStake:         stats.TotalStake,
+		NetworkHealth:      stats.NetworkHealth,
+		
+		// RPC Stats (from get-stats calls) - NEW!
+		AverageCPUPercent:       avgCPU,
+		AverageRAMUsedBytes:     int64(avgRAMUsed),
+		AverageRAMTotalBytes:    int64(avgRAMTotal),
+		AverageUptimeSeconds:    int64(avgUptime),
+		TotalPacketsReceived:    totalPacketsReceived,
+		TotalPacketsSent:        totalPacketsSent,
+		NodesWithRPCStats:       nodesWithStats,
+		
+		LastUpdated: stats.LastUpdated.String(),
 	}
 
 	// Set stale header if data is old
@@ -78,23 +115,38 @@ func (h *Handler) GetStats(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-// NetworkStatsResponse represents the enhanced stats response
+// NetworkStatsResponse represents the enhanced stats response with RPC data
 type NetworkStatsResponse struct {
-	TotalNodes                     int     `json:"total_nodes"`    // All IP addresses
-	TotalPods                      int     `json:"total_pods"`     // Unique pubkeys
-	OnlineNodes                    int     `json:"online_nodes"`
-	WarningNodes                   int     `json:"warning_nodes"`
-	OfflineNodes                   int     `json:"offline_nodes"`
-	PublicNodes                    int     `json:"public_nodes"`
-	PrivateNodes                   int     `json:"private_nodes"`
+	// Node counts
+	TotalNodes   int `json:"total_nodes"`   // All IP addresses
+	TotalPods    int `json:"total_pods"`    // Unique pubkeys
+	OnlineNodes  int `json:"online_nodes"`
+	WarningNodes int `json:"warning_nodes"`
+	OfflineNodes int `json:"offline_nodes"`
+	PublicNodes  int `json:"public_nodes"`
+	PrivateNodes int `json:"private_nodes"`
+	
+	// Storage metrics
 	TotalStorageBytes              float64 `json:"total_storage_bytes"`
 	UsedStorageBytes               float64 `json:"used_storage_bytes"`
 	AvgStorageCommittedPerPodBytes float64 `json:"average_storage_committed_per_pod_bytes"`
-	AverageUptime                  float64 `json:"average_uptime"`
-	AveragePerformance             float64 `json:"average_performance"`
-	TotalStake                     int64   `json:"total_stake"`
-	NetworkHealth                  float64 `json:"network_health"`
-	LastUpdated                    string  `json:"last_updated"`
+	
+	// Performance metrics
+	AverageUptime      float64 `json:"average_uptime"`
+	AveragePerformance float64 `json:"average_performance"`
+	TotalStake         int64   `json:"total_stake"`
+	NetworkHealth      float64 `json:"network_health"`
+	
+	// RPC Stats (from get-stats calls) - NEW!
+	AverageCPUPercent       float64 `json:"average_cpu_percent"`
+	AverageRAMUsedBytes     int64   `json:"average_ram_used_bytes"`
+	AverageRAMTotalBytes    int64   `json:"average_ram_total_bytes"`
+	AverageUptimeSeconds    int64   `json:"average_uptime_seconds"`
+	TotalPacketsReceived    int64   `json:"total_packets_received"`
+	TotalPacketsSent        int64   `json:"total_packets_sent"`
+	NodesWithRPCStats       int     `json:"nodes_with_rpc_stats"`
+	
+	LastUpdated string `json:"last_updated"`
 }
 
 // ErrorResponse represents an error response
