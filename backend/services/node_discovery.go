@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"sort"
 
 	"xand/config"
 	"xand/models"
@@ -154,13 +155,29 @@ func (nd *NodeDiscovery) runStatsLoop() {
 
 
 
+// func (nd *NodeDiscovery) runHealthLoop() {
+// 	ticker := time.NewTicker(time.Duration(nd.cfg.Polling.HealthCheckInterval) * time.Second)
+// 	defer ticker.Stop()
+// 	for {
+// 		select {
+// 		case <-ticker.C:
+// 			nd.healthCheckSampled() // Use sampling instead of full check
+// 		case <-nd.stopChan:
+// 			return
+// 		}
+// 	}
+// }
+
+
+
+
 func (nd *NodeDiscovery) runHealthLoop() {
 	ticker := time.NewTicker(time.Duration(nd.cfg.Polling.HealthCheckInterval) * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			nd.healthCheckSampled() // Use sampling instead of full check
+			nd.healthCheckOptimized() // Use optimized version
 		case <-nd.stopChan:
 			return
 		}
@@ -168,49 +185,365 @@ func (nd *NodeDiscovery) runHealthLoop() {
 }
 
 
-func (nd *NodeDiscovery) Bootstrap() {
-	log.Println("Starting Bootstrap...")
+
+
+
+// func (nd *NodeDiscovery) Bootstrap() {
+// 	log.Println("Starting Bootstrap...")
 	
+// 	var wg sync.WaitGroup
+// 	for _, seed := range nd.cfg.Server.SeedNodes {
+// 		wg.Add(1)
+// 		go func(seedAddr string) {
+// 			defer wg.Done()
+// 			log.Printf("Bootstrapping from seed: %s", seedAddr)
+// 			nd.processNodeAddress(seedAddr)
+// 		}(seed)
+// 		time.Sleep(500 * time.Millisecond)
+// 	}
+	
+// 	wg.Wait()
+// 	log.Println("Bootstrap complete, starting peer discovery...")
+	
+// 	for i := 0; i < 3; i++ {
+// 		log.Printf("Bootstrap peer discovery round %d/3", i+1)
+// 		nd.discoverPeers()
+		
+// 		nd.nodesMutex.RLock()
+// 		nodeCount := len(nd.knownNodes)
+// 		nd.nodesMutex.RUnlock()
+		
+// 		log.Printf("After round %d: %d nodes tracked", i+1, nodeCount)
+		
+// 		if i < 2 {
+// 			time.Sleep(5 * time.Second)
+// 		}
+// 	}
+	
+// 	log.Println("Running initial health check and stats collection...")
+// 	nd.healthCheck()
+// 	time.Sleep(2 * time.Second)
+// 	nd.collectStats()
+	
+// 	nd.nodesMutex.RLock()
+// 	finalCount := len(nd.knownNodes)
+// 	nd.nodesMutex.RUnlock()
+	
+// 	log.Printf("Bootstrap finished. Total nodes discovered: %d", finalCount)
+// }
+
+func (nd *NodeDiscovery) Bootstrap() {
+	log.Println("Starting optimized Bootstrap...")
+	
+	// Seed discovery
 	var wg sync.WaitGroup
 	for _, seed := range nd.cfg.Server.SeedNodes {
 		wg.Add(1)
 		go func(seedAddr string) {
 			defer wg.Done()
-			log.Printf("Bootstrapping from seed: %s", seedAddr)
 			nd.processNodeAddress(seedAddr)
 		}(seed)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) // Reduced from 500ms
 	}
-	
 	wg.Wait()
-	log.Println("Bootstrap complete, starting peer discovery...")
 	
-	for i := 0; i < 3; i++ {
-		log.Printf("Bootstrap peer discovery round %d/3", i+1)
-		nd.discoverPeers()
-		
-		nd.nodesMutex.RLock()
-		nodeCount := len(nd.knownNodes)
-		nd.nodesMutex.RUnlock()
-		
-		log.Printf("After round %d: %d nodes tracked", i+1, nodeCount)
-		
-		if i < 2 {
-			time.Sleep(5 * time.Second)
+	// SINGLE strategic peer discovery
+	log.Println("Strategic peer discovery (1 round only)...")
+	nd.discoverPeersStrategic()
+	
+	// Quick status check on subset
+	log.Println("Quick validation of discovered nodes...")
+	nd.quickValidation()
+	
+	log.Printf("Bootstrap complete. Nodes discovered: %d", len(nd.knownNodes))
+}
+
+
+
+
+
+// 2. STRATEGIC PEER DISCOVERY - Query fewer, smarter nodes
+func (nd *NodeDiscovery) discoverPeersStrategic() {
+	nodes := nd.GetNodes()
+	
+	// Select diverse, high-quality nodes
+	candidates := nd.selectStrategicNodes(nodes, 5) // Only query 5 best nodes
+	
+	log.Printf("Querying %d strategic nodes for complete peer list", len(candidates))
+	
+	var wg sync.WaitGroup
+	for _, node := range candidates {
+		wg.Add(1)
+		go func(n *models.Node) {
+			defer wg.Done()
+			nd.discoverPeersFromNode(n.Address)
+		}(node)
+		time.Sleep(300 * time.Millisecond)
+	}
+	wg.Wait()
+	
+	totalIPs, uniquePubkeys := nd.GetNodeCounts()
+	log.Printf("Strategic discovery complete. IPs: %d, Pubkeys: %d", totalIPs, uniquePubkeys)
+}
+
+
+
+
+
+
+
+
+func (nd *NodeDiscovery) selectStrategicNodes(nodes []*models.Node, count int) []*models.Node {
+	// Filter online nodes with good track record
+	candidates := make([]*models.Node, 0)
+	for _, n := range nodes {
+		if n.IsOnline && n.UptimeScore > 80 && n.Status == "online" {
+			candidates = append(candidates, n)
 		}
 	}
 	
-	log.Println("Running initial health check and stats collection...")
-	nd.healthCheck()
-	time.Sleep(2 * time.Second)
-	nd.collectStats()
+	if len(candidates) <= count {
+		return candidates
+	}
 	
-	nd.nodesMutex.RLock()
-	finalCount := len(nd.knownNodes)
-	nd.nodesMutex.RUnlock()
+	// Diversify by country
+	countryMap := make(map[string]*models.Node)
+	for _, n := range candidates {
+		if _, exists := countryMap[n.Country]; !exists {
+			countryMap[n.Country] = n
+		}
+	}
 	
-	log.Printf("Bootstrap finished. Total nodes discovered: %d", finalCount)
+	result := make([]*models.Node, 0, count)
+	for _, n := range countryMap {
+		result = append(result, n)
+		if len(result) >= count {
+			break
+		}
+	}
+	
+	// Fill remaining with best performers
+	for _, n := range candidates {
+		if len(result) >= count {
+			break
+		}
+		found := false
+		for _, existing := range result {
+			if existing.ID == n.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, n)
+		}
+	}
+	
+	return result
 }
+
+// 3. QUICK VALIDATION - Fast connectivity check on subset
+func (nd *NodeDiscovery) quickValidation() {
+	nodes := nd.GetNodes()
+	
+	// Only validate 20% of nodes, prioritize recently seen
+	sampleSize := len(nodes) / 5
+	if sampleSize > 50 {
+		sampleSize = 50
+	}
+	if sampleSize < 10 {
+		sampleSize = len(nodes)
+	}
+	
+	// Sort by last seen, take most recent
+	type nodePriority struct {
+		node     *models.Node
+		priority time.Duration
+	}
+	
+	priorities := make([]nodePriority, len(nodes))
+	for i, n := range nodes {
+		priorities[i] = nodePriority{
+			node:     n,
+			priority: time.Since(n.LastSeen),
+		}
+	}
+	
+	// Sort by most recent first
+	sort.Slice(priorities, func(i, j int) bool {
+		return priorities[i].priority < priorities[j].priority
+	})
+	
+	toValidate := make([]*models.Node, 0, sampleSize)
+	for i := 0; i < sampleSize && i < len(priorities); i++ {
+		toValidate = append(toValidate, priorities[i].node)
+	}
+	
+	log.Printf("Quick validation of %d nodes...", len(toValidate))
+	
+	sem := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+	
+	for _, node := range toValidate {
+		wg.Add(1)
+		go func(n *models.Node) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			
+			rpcAddr := nd.getRPCAddress(n)
+			verResp, err := nd.prpc.GetVersion(rpcAddr)
+			
+			nd.nodesMutex.Lock()
+			if stored, exists := nd.knownNodes[n.ID]; exists {
+				updateCallHistory(stored, err == nil)
+				if err == nil {
+					stored.LastSeen = time.Now()
+					stored.Version = verResp.Version
+				}
+				utils.CalculateScore(stored)
+				utils.DetermineStatus(stored)
+			}
+			nd.nodesMutex.Unlock()
+		}(node)
+	}
+	
+	wg.Wait()
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+func (nd *NodeDiscovery) healthCheckOptimized() {
+	nodes := nd.GetNodes()
+	
+	// CRITICAL: Much smaller concurrent limit
+	batchSize := 15 // Process 15 at a time
+	delay := 150 * time.Millisecond // Reduced delay
+	
+	log.Printf("Starting optimized health check (%d nodes, batches of %d)...", 
+		len(nodes), batchSize)
+	
+	successCount := 0
+	failureCount := 0
+	var resultMutex sync.Mutex
+	
+	// Process in batches
+	for i := 0; i < len(nodes); i += batchSize {
+		end := i + batchSize
+		if end > len(nodes) {
+			end = len(nodes)
+		}
+		
+		batch := nodes[i:end]
+		var wg sync.WaitGroup
+		
+		for _, node := range batch {
+			wg.Add(1)
+			go func(n *models.Node) {
+				defer wg.Done()
+				
+				start := time.Now()
+				rpcAddr := nd.getRPCAddress(n)
+				verResp, err := nd.prpc.GetVersion(rpcAddr)
+				latency := time.Since(start).Milliseconds()
+				
+				nd.nodesMutex.Lock()
+				if stored, exists := nd.knownNodes[n.ID]; exists {
+					stored.ResponseTime = latency
+					updateCallHistory(stored, err == nil)
+					stored.TotalCalls++
+					
+					if err == nil {
+						stored.SuccessCalls++
+						stored.LastSeen = time.Now()
+						stored.Version = verResp.Version
+						
+						resultMutex.Lock()
+						successCount++
+						resultMutex.Unlock()
+					} else {
+						resultMutex.Lock()
+						failureCount++
+						resultMutex.Unlock()
+					}
+					
+					utils.CalculateScore(stored)
+					utils.DetermineStatus(stored)
+				}
+				nd.nodesMutex.Unlock()
+			}(node)
+			
+			time.Sleep(delay)
+		}
+		
+		wg.Wait() // Wait for batch to complete before next
+		
+		// Brief pause between batches
+		if end < len(nodes) {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	
+	log.Printf("Health check complete: %d success, %d fail", successCount, failureCount)
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func (nd *NodeDiscovery) processNodeAddress(address string) {
 	nd.failedMutex.RLock()
@@ -633,102 +966,102 @@ func (nd *NodeDiscovery) collectStats() {
 
 
 
-func (nd *NodeDiscovery) healthCheck() {
-	nodes := nd.GetNodes()
+// func (nd *NodeDiscovery) healthCheck() {
+// 	nodes := nd.GetNodes()
 	
-	// CRITICAL FIX: Much smaller concurrency to prevent overwhelming network
-	sem := make(chan struct{}, 5) // REDUCED from 20 to 5
-	var wg sync.WaitGroup
+// 	// CRITICAL FIX: Much smaller concurrency to prevent overwhelming network
+// 	sem := make(chan struct{}, 5) // REDUCED from 20 to 5
+// 	var wg sync.WaitGroup
 	
-	log.Printf("Starting health check for %d nodes...", len(nodes))
+// 	log.Printf("Starting health check for %d nodes...", len(nodes))
 	
-	// Track results
-	successCount := 0
-	failureCount := 0
-	var resultMutex sync.Mutex
+// 	// Track results
+// 	successCount := 0
+// 	failureCount := 0
+// 	var resultMutex sync.Mutex
 	
-	for _, node := range nodes {
-		wg.Add(1)
+// 	for _, node := range nodes {
+// 		wg.Add(1)
 		
-		go func(n *models.Node) {
-			defer wg.Done()
+// 		go func(n *models.Node) {
+// 			defer wg.Done()
 			
-			sem <- struct{}{}
-			defer func() { <-sem }()
+// 			sem <- struct{}{}
+// 			defer func() { <-sem }()
 			
-			start := time.Now()
-			//verResp, err := nd.prpc.GetVersion(n.Address)
-			 rpcAddr := nd.getRPCAddress(n)
-            verResp, err := nd.prpc.GetVersion(rpcAddr)
-			latency := time.Since(start).Milliseconds()
+// 			start := time.Now()
+// 			//verResp, err := nd.prpc.GetVersion(n.Address)
+// 			 rpcAddr := nd.getRPCAddress(n)
+//             verResp, err := nd.prpc.GetVersion(rpcAddr)
+// 			latency := time.Since(start).Milliseconds()
 
-			nd.nodesMutex.Lock()
-			defer nd.nodesMutex.Unlock()
+// 			nd.nodesMutex.Lock()
+// 			defer nd.nodesMutex.Unlock()
 
-			storedNode, exists := nd.knownNodes[n.ID]
-			if !exists {
-				return
-			}
+// 			storedNode, exists := nd.knownNodes[n.ID]
+// 			if !exists {
+// 				return
+// 			}
 
-			// CRITICAL FIX: Always update ResponseTime and call history
-			storedNode.ResponseTime = latency
-			updateCallHistory(storedNode, err == nil)
-			storedNode.TotalCalls++
+// 			// CRITICAL FIX: Always update ResponseTime and call history
+// 			storedNode.ResponseTime = latency
+// 			updateCallHistory(storedNode, err == nil)
+// 			storedNode.TotalCalls++
 			
-			if err == nil {
-				storedNode.SuccessCalls++
-				// Update LastSeen on success
-				storedNode.LastSeen = time.Now()
-				storedNode.Version = verResp.Version
+// 			if err == nil {
+// 				storedNode.SuccessCalls++
+// 				// Update LastSeen on success
+// 				storedNode.LastSeen = time.Now()
+// 				storedNode.Version = verResp.Version
 				
-				versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
-				storedNode.VersionStatus = versionStatus
-				storedNode.IsUpgradeNeeded = needsUpgrade
-				storedNode.UpgradeSeverity = severity
-				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
+// 				versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
+// 				storedNode.VersionStatus = versionStatus
+// 				storedNode.IsUpgradeNeeded = needsUpgrade
+// 				storedNode.UpgradeSeverity = severity
+// 				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
 				
-				resultMutex.Lock()
-				successCount++
-				resultMutex.Unlock()
-			} else {
-				resultMutex.Lock()
-				failureCount++
-				resultMutex.Unlock()
-			}
+// 				resultMutex.Lock()
+// 				successCount++
+// 				resultMutex.Unlock()
+// 			} else {
+// 				resultMutex.Lock()
+// 				failureCount++
+// 				resultMutex.Unlock()
+// 			}
 			
-			// CRITICAL FIX: Only recalculate status after accumulating evidence
-			utils.CalculateScore(storedNode)
-			utils.DetermineStatus(storedNode)
-		}(node)
+// 			// CRITICAL FIX: Only recalculate status after accumulating evidence
+// 			utils.CalculateScore(storedNode)
+// 			utils.DetermineStatus(storedNode)
+// 		}(node)
 		
-		// CRITICAL FIX: Larger delay between checks to prevent overwhelming
-		time.Sleep(200 * time.Millisecond) // INCREASED from 50ms to 200ms
-	}
+// 		// CRITICAL FIX: Larger delay between checks to prevent overwhelming
+// 		time.Sleep(200 * time.Millisecond) // INCREASED from 50ms to 200ms
+// 	}
 	
-	// Wait for all health checks to complete
-	wg.Wait()
+// 	// Wait for all health checks to complete
+// 	wg.Wait()
 	
-	// Count final results
-	online := 0
-	warning := 0
-	offline := 0
+// 	// Count final results
+// 	online := 0
+// 	warning := 0
+// 	offline := 0
 	
-	nd.nodesMutex.RLock()
-	for _, n := range nd.knownNodes {
-		switch n.Status {
-		case "online":
-			online++
-		case "warning":
-			warning++
-		case "offline":
-			offline++
-		}
-	}
-	nd.nodesMutex.RUnlock()
+// 	nd.nodesMutex.RLock()
+// 	for _, n := range nd.knownNodes {
+// 		switch n.Status {
+// 		case "online":
+// 			online++
+// 		case "warning":
+// 			warning++
+// 		case "offline":
+// 			offline++
+// 		}
+// 	}
+// 	nd.nodesMutex.RUnlock()
 	
-	log.Printf("Health check complete: %d successful, %d failed. Status: Online=%d, Warning=%d, Offline=%d (Total=%d)", 
-		successCount, failureCount, online, warning, offline, len(nodes))
-}
+// 	log.Printf("Health check complete: %d successful, %d failed. Status: Online=%d, Warning=%d, Offline=%d (Total=%d)", 
+// 		successCount, failureCount, online, warning, offline, len(nodes))
+// }
 
 func updateCallHistory(n *models.Node, success bool) {
 	if n.CallHistory == nil {
@@ -1053,162 +1386,162 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 
 
 
-func (nd *NodeDiscovery) healthCheckSampled() {
-	nodes := nd.GetNodes()
+// func (nd *NodeDiscovery) healthCheckSampled() {
+// 	nodes := nd.GetNodes()
 	
-	log.Printf("Starting sampled health check for %d total nodes...", len(nodes))
+// 	log.Printf("Starting sampled health check for %d total nodes...", len(nodes))
 	
-	// STRATEGY: Check nodes in priority order
-	// 1. Recently seen nodes (high priority - should respond quickly)
-	// 2. Warning nodes (medium priority - need verification)
-	// 3. Offline nodes (low priority - sample only)
+// 	// STRATEGY: Check nodes in priority order
+// 	// 1. Recently seen nodes (high priority - should respond quickly)
+// 	// 2. Warning nodes (medium priority - need verification)
+// 	// 3. Offline nodes (low priority - sample only)
 	
-	now := time.Now()
-	var recentNodes []*models.Node
-	var warningNodes []*models.Node
-	var offlineNodes []*models.Node
-	var otherNodes []*models.Node
+// 	now := time.Now()
+// 	var recentNodes []*models.Node
+// 	var warningNodes []*models.Node
+// 	var offlineNodes []*models.Node
+// 	var otherNodes []*models.Node
 	
-	for _, n := range nodes {
-		age := now.Sub(n.LastSeen)
+// 	for _, n := range nodes {
+// 		age := now.Sub(n.LastSeen)
 		
-		switch n.Status {
-		case "online":
-			if age < 5*time.Minute {
-				recentNodes = append(recentNodes, n)
-			} else {
-				otherNodes = append(otherNodes, n)
-			}
-		case "warning":
-			warningNodes = append(warningNodes, n)
-		case "offline":
-			offlineNodes = append(offlineNodes, n)
-		default:
-			otherNodes = append(otherNodes, n)
-		}
-	}
+// 		switch n.Status {
+// 		case "online":
+// 			if age < 5*time.Minute {
+// 				recentNodes = append(recentNodes, n)
+// 			} else {
+// 				otherNodes = append(otherNodes, n)
+// 			}
+// 		case "warning":
+// 			warningNodes = append(warningNodes, n)
+// 		case "offline":
+// 			offlineNodes = append(offlineNodes, n)
+// 		default:
+// 			otherNodes = append(otherNodes, n)
+// 		}
+// 	}
 	
-	log.Printf("Health check strategy: %d recent, %d warning, %d offline, %d other",
-		len(recentNodes), len(warningNodes), len(offlineNodes), len(otherNodes))
+// 	log.Printf("Health check strategy: %d recent, %d warning, %d offline, %d other",
+// 		len(recentNodes), len(warningNodes), len(offlineNodes), len(otherNodes))
 	
-	// Build check list with sampling
-	var nodesToCheck []*models.Node
+// 	// Build check list with sampling
+// 	var nodesToCheck []*models.Node
 	
-	// Always check ALL recent online nodes (they should respond fast)
-	nodesToCheck = append(nodesToCheck, recentNodes...)
+// 	// Always check ALL recent online nodes (they should respond fast)
+// 	nodesToCheck = append(nodesToCheck, recentNodes...)
 	
-	// Check ALL warning nodes (need to determine if they're recovering)
-	nodesToCheck = append(nodesToCheck, warningNodes...)
+// 	// Check ALL warning nodes (need to determine if they're recovering)
+// 	nodesToCheck = append(nodesToCheck, warningNodes...)
 	
-	// Sample other nodes (25%)
-	sampleSize := len(otherNodes) / 4
-	if sampleSize > 20 {
-		sampleSize = 20
-	}
-	for i := 0; i < sampleSize && i < len(otherNodes); i++ {
-		nodesToCheck = append(nodesToCheck, otherNodes[i])
-	}
+// 	// Sample other nodes (25%)
+// 	sampleSize := len(otherNodes) / 4
+// 	if sampleSize > 20 {
+// 		sampleSize = 20
+// 	}
+// 	for i := 0; i < sampleSize && i < len(otherNodes); i++ {
+// 		nodesToCheck = append(nodesToCheck, otherNodes[i])
+// 	}
 	
-	// Sample offline nodes very lightly (10%)
-	offlineSampleSize := len(offlineNodes) / 10
-	if offlineSampleSize > 10 {
-		offlineSampleSize = 10
-	}
-	if offlineSampleSize < 5 && len(offlineNodes) > 0 {
-		offlineSampleSize = 5
-	}
-	for i := 0; i < offlineSampleSize && i < len(offlineNodes); i++ {
-		nodesToCheck = append(nodesToCheck, offlineNodes[i])
-	}
+// 	// Sample offline nodes very lightly (10%)
+// 	offlineSampleSize := len(offlineNodes) / 10
+// 	if offlineSampleSize > 10 {
+// 		offlineSampleSize = 10
+// 	}
+// 	if offlineSampleSize < 5 && len(offlineNodes) > 0 {
+// 		offlineSampleSize = 5
+// 	}
+// 	for i := 0; i < offlineSampleSize && i < len(offlineNodes); i++ {
+// 		nodesToCheck = append(nodesToCheck, offlineNodes[i])
+// 	}
 	
-	log.Printf("Checking %d nodes this cycle (sampling from %d total)",
-		len(nodesToCheck), len(nodes))
+// 	log.Printf("Checking %d nodes this cycle (sampling from %d total)",
+// 		len(nodesToCheck), len(nodes))
 	
-	// Now run health checks on sampled nodes
-	sem := make(chan struct{}, 10) // Moderate concurrency
-	var wg sync.WaitGroup
+// 	// Now run health checks on sampled nodes
+// 	sem := make(chan struct{}, 10) // Moderate concurrency
+// 	var wg sync.WaitGroup
 	
-	successCount := 0
-	failureCount := 0
-	var resultMutex sync.Mutex
+// 	successCount := 0
+// 	failureCount := 0
+// 	var resultMutex sync.Mutex
 	
-	for _, node := range nodesToCheck {
-		wg.Add(1)
+// 	for _, node := range nodesToCheck {
+// 		wg.Add(1)
 		
-		go func(n *models.Node) {
-			defer wg.Done()
+// 		go func(n *models.Node) {
+// 			defer wg.Done()
 			
-			sem <- struct{}{}
-			defer func() { <-sem }()
+// 			sem <- struct{}{}
+// 			defer func() { <-sem }()
 			
-			start := time.Now()
-			//verResp, err := nd.prpc.GetVersion(n.Address)
-			 rpcAddr := nd.getRPCAddress(n)
-            verResp, err := nd.prpc.GetVersion(rpcAddr)
-			latency := time.Since(start).Milliseconds()
+// 			start := time.Now()
+// 			//verResp, err := nd.prpc.GetVersion(n.Address)
+// 			 rpcAddr := nd.getRPCAddress(n)
+//             verResp, err := nd.prpc.GetVersion(rpcAddr)
+// 			latency := time.Since(start).Milliseconds()
 
-			nd.nodesMutex.Lock()
-			defer nd.nodesMutex.Unlock()
+// 			nd.nodesMutex.Lock()
+// 			defer nd.nodesMutex.Unlock()
 
-			storedNode, exists := nd.knownNodes[n.ID]
-			if !exists {
-				return
-			}
+// 			storedNode, exists := nd.knownNodes[n.ID]
+// 			if !exists {
+// 				return
+// 			}
 
-			storedNode.ResponseTime = latency
-			updateCallHistory(storedNode, err == nil)
-			storedNode.TotalCalls++
+// 			storedNode.ResponseTime = latency
+// 			updateCallHistory(storedNode, err == nil)
+// 			storedNode.TotalCalls++
 			
-			if err == nil {
-				storedNode.SuccessCalls++
-				storedNode.LastSeen = time.Now()
-				storedNode.Version = verResp.Version
+// 			if err == nil {
+// 				storedNode.SuccessCalls++
+// 				storedNode.LastSeen = time.Now()
+// 				storedNode.Version = verResp.Version
 				
-				versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
-				storedNode.VersionStatus = versionStatus
-				storedNode.IsUpgradeNeeded = needsUpgrade
-				storedNode.UpgradeSeverity = severity
-				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
+// 				versionStatus, needsUpgrade, severity := utils.CheckVersionStatus(verResp.Version, nil)
+// 				storedNode.VersionStatus = versionStatus
+// 				storedNode.IsUpgradeNeeded = needsUpgrade
+// 				storedNode.UpgradeSeverity = severity
+// 				storedNode.UpgradeMessage = utils.GetUpgradeMessage(verResp.Version, nil)
 				
-				resultMutex.Lock()
-				successCount++
-				resultMutex.Unlock()
-			} else {
-				resultMutex.Lock()
-				failureCount++
-				resultMutex.Unlock()
-			}
+// 				resultMutex.Lock()
+// 				successCount++
+// 				resultMutex.Unlock()
+// 			} else {
+// 				resultMutex.Lock()
+// 				failureCount++
+// 				resultMutex.Unlock()
+// 			}
 			
-			utils.CalculateScore(storedNode)
-			utils.DetermineStatus(storedNode)
-		}(node)
+// 			utils.CalculateScore(storedNode)
+// 			utils.DetermineStatus(storedNode)
+// 		}(node)
 		
-		time.Sleep(100 * time.Millisecond)
-	}
+// 		time.Sleep(100 * time.Millisecond)
+// 	}
 	
-	wg.Wait()
+// 	wg.Wait()
 	
-	// Count final status across ALL nodes (not just checked ones)
-	online := 0
-	warning := 0
-	offline := 0
+// 	// Count final status across ALL nodes (not just checked ones)
+// 	online := 0
+// 	warning := 0
+// 	offline := 0
 	
-	nd.nodesMutex.RLock()
-	for _, n := range nd.knownNodes {
-		switch n.Status {
-		case "online":
-			online++
-		case "warning":
-			warning++
-		case "offline":
-			offline++
-		}
-	}
-	nd.nodesMutex.RUnlock()
+// 	nd.nodesMutex.RLock()
+// 	for _, n := range nd.knownNodes {
+// 		switch n.Status {
+// 		case "online":
+// 			online++
+// 		case "warning":
+// 			warning++
+// 		case "offline":
+// 			offline++
+// 		}
+// 	}
+// 	nd.nodesMutex.RUnlock()
 	
-	log.Printf("Health check complete: Checked %d nodes (%d success, %d fail). Overall status: Online=%d, Warning=%d, Offline=%d (Total=%d)", 
-		len(nodesToCheck), successCount, failureCount, online, warning, offline, len(nodes))
-}
+// 	log.Printf("Health check complete: Checked %d nodes (%d success, %d fail). Overall status: Online=%d, Warning=%d, Offline=%d (Total=%d)", 
+// 		len(nodesToCheck), successCount, failureCount, online, warning, offline, len(nodes))
+// }
 
 
 

@@ -131,35 +131,76 @@ if regService != nil {
 	topologyService := services.NewTopologyService(cache, discovery)
 	comparisonService := services.NewComparisonService(cache)
 
-	// 3. Start Background Services
+	// // 3. Start Background Services
+	// log.Println("=== Starting Services ===")
+	
+	// // Start Credits Service
+	// creditsService.Start()
+	// log.Println("✓ Credits Service started")
+	
+	// // Start Node Discovery
+	// discovery.Start()
+	// log.Println("✓ Node Discovery started")
+	
+	// // Wait for initial discovery
+	// log.Println("⏳ Waiting for initial node discovery...")
+	// time.Sleep(30 * time.Second)
+	
+	// // Start Cache Warmer (will use Redis or fall back to in-memory)
+	// cache.StartCacheWarmer()
+	// log.Println("✓ Cache Service started")
+	// log.Printf("   Mode: %s", cache.GetCacheMode())
+	
+	// // Start History Service
+	// historyService.Start()
+	// log.Println("✓ History Service started")
+	
+	// // Start Alert Service
+	// alertService.Start()
+	// log.Println("✓ Alert Service started")
+	
+	// log.Println("=== All Services Running ===")
+
+
 	log.Println("=== Starting Services ===")
 	
-	// Start Credits Service
+	// 1. Start Credits Service (fast, no blocking)
 	creditsService.Start()
 	log.Println("✓ Credits Service started")
 	
-	// Start Node Discovery
+	// 2. Start Node Discovery (with optimized bootstrap)
 	discovery.Start()
 	log.Println("✓ Node Discovery started")
 	
-	// Wait for initial discovery
-	log.Println("⏳ Waiting for initial node discovery...")
-	time.Sleep(30 * time.Second)
+	// 3. REDUCED wait - optimized bootstrap is much faster
+	log.Println("⏳ Initial node discovery...")
+	time.Sleep(10 * time.Second) // REDUCED from 30s to 10s
 	
-	// Start Cache Warmer (will use Redis or fall back to in-memory)
+	// 4. Start Cache (will do first refresh immediately)
 	cache.StartCacheWarmer()
 	log.Println("✓ Cache Service started")
 	log.Printf("   Mode: %s", cache.GetCacheMode())
 	
-	// Start History Service
+	// 5. Wait for first cache refresh to complete
+	log.Println("⏳ Waiting for initial cache warm...")
+	time.Sleep(3 * time.Second) // Brief wait for first refresh
+	
+	// 6. Start other services (non-blocking)
 	historyService.Start()
 	log.Println("✓ History Service started")
 	
-	// Start Alert Service
 	alertService.Start()
 	log.Println("✓ Alert Service started")
 	
+	if err := alertService.LoadAlertsFromDB(); err != nil {
+		log.Printf("Warning: Failed to load alerts: %v", err)
+	} else {
+		log.Println("✓ Alerts loaded from MongoDB")
+	}
+	
 	log.Println("=== All Services Running ===")
+	log.Println("🚀 System ready - total startup time: ~13 seconds")
+	
 
 	// 4. Web Server
 	e := echo.New()
