@@ -156,25 +156,10 @@ func (cs *CacheService) Stop() {
 	}
 }
 
-// runRefreshLoop periodically refreshes cache
-// func (cs *CacheService) runRefreshLoop() {
-// 	interval := time.Duration(cs.cfg.Polling.StatsInterval) * time.Second
-// 	ticker := time.NewTicker(interval)
-// 	defer ticker.Stop()
 
-// 	for {
-// 		select {
-// 		case <-ticker.C:
-// 			cs.Refresh()
-// 		case <-cs.stopChan:
-// 			return
-// 		}
-// 	}
-// }
 
-// OPTIMIZED: Faster refresh loop with adaptive intervals
 func (cs *CacheService) runRefreshLoop() {
-	// Start with shorter interval, increase as network stabilizes
+	// With 1s gossip propagation, we can refresh more frequently
 	baseInterval := time.Duration(cs.cfg.Polling.StatsInterval) * time.Second
 	currentInterval := baseInterval
 
@@ -195,7 +180,7 @@ func (cs *CacheService) runRefreshLoop() {
 				consecutiveSlowRefreshes++
 				if consecutiveSlowRefreshes > 3 && currentInterval < 2*baseInterval {
 					// Slow down refreshes if they're taking too long
-					currentInterval = currentInterval + 10*time.Second
+					currentInterval = currentInterval + 5*time.Second
 					ticker.Reset(currentInterval)
 					log.Printf("Cache refresh taking long (%s), increased interval to %s",
 						elapsed, currentInterval)
@@ -276,41 +261,6 @@ func (cs *CacheService) syncInMemoryToRedis() {
 	log.Printf("Synced %d items to Redis", synced)
 }
 
-// REPLACE the Refresh function in services/cache.go
-
-// func (cs *CacheService) Refresh() {
-// 	start := time.Now()
-
-// 	// CRITICAL FIX: Add mutex to prevent concurrent refreshes
-// 	// This ensures we get consistent snapshots
-
-// 	// Get aggregated stats (this calls GetAllNodes internally)
-// 	stats := cs.aggregator.Aggregate()
-
-// 	// CRITICAL FIX: Get nodes AFTER aggregation to ensure consistency
-// 	allNodes := cs.aggregator.discovery.GetAllNodes()
-// 	uniqueNodes := cs.aggregator.discovery.GetNodes()
-
-// 	// Update caches with appropriate TTL
-// 	ttl := time.Duration(cs.cfg.Cache.TTL) * time.Second
-
-// 	cs.Set("stats", stats, ttl)
-// 	cs.Set("nodes", allNodes, ttl) // All IP addresses
-// 	cs.Set("nodes:unique", uniqueNodes, ttl) // Unique pubkeys
-
-// 	// Update individual node caches (limit to avoid overwhelming cache)
-// 	maxIndividualNodes := 250
-// 	for i, n := range uniqueNodes {
-// 		if i >= maxIndividualNodes {
-// 			break
-// 		}
-// 		cs.Set("node:"+n.ID, n, 60*time.Second)
-// 	}
-
-// 	elapsed := time.Since(start)
-// 	log.Printf("Cache refreshed (%s): %d online/%d total IPs, %d unique pubkeys | Mode: %s",
-// 		elapsed, stats.OnlineNodes, len(allNodes), len(uniqueNodes), cs.getMode())
-// }
 
 func (cs *CacheService) Refresh() {
 	// Prevent concurrent refreshes

@@ -109,7 +109,7 @@ func (nd *NodeDiscovery) cleanupFailedAddresses() {
 }
 
 func (nd *NodeDiscovery) runDiscoveryLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(45 * time.Second)
 	defer ticker.Stop()
 	
 	discoveryCount := 0
@@ -155,29 +155,28 @@ func (nd *NodeDiscovery) runStatsLoop() {
 
 
 
-// func (nd *NodeDiscovery) runHealthLoop() {
-// 	ticker := time.NewTicker(time.Duration(nd.cfg.Polling.HealthCheckInterval) * time.Second)
-// 	defer ticker.Stop()
-// 	for {
-// 		select {
-// 		case <-ticker.C:
-// 			nd.healthCheckSampled() // Use sampling instead of full check
-// 		case <-nd.stopChan:
-// 			return
-// 		}
-// 	}
-// }
-
-
-
 
 func (nd *NodeDiscovery) runHealthLoop() {
 	ticker := time.NewTicker(time.Duration(nd.cfg.Polling.HealthCheckInterval) * time.Second)
 	defer ticker.Stop()
+	
+	var healthCheckRunning sync.Mutex  // NEW: Prevent overlapping health checks
+	
 	for {
 		select {
 		case <-ticker.C:
-			nd.healthCheckOptimized() // Use optimized version
+			// Try to acquire lock (non-blocking)
+			if !healthCheckRunning.TryLock() {
+				log.Println("⚠️  Skipping health check - previous check still running")
+				continue
+			}
+			
+			// Run health check in goroutine but hold lock
+			go func() {
+				defer healthCheckRunning.Unlock()
+				nd.healthCheckOptimized()
+			}()
+			
 		case <-nd.stopChan:
 			return
 		}
@@ -186,54 +185,8 @@ func (nd *NodeDiscovery) runHealthLoop() {
 
 
 
-
-
-// func (nd *NodeDiscovery) Bootstrap() {
-// 	log.Println("Starting Bootstrap...")
-	
-// 	var wg sync.WaitGroup
-// 	for _, seed := range nd.cfg.Server.SeedNodes {
-// 		wg.Add(1)
-// 		go func(seedAddr string) {
-// 			defer wg.Done()
-// 			log.Printf("Bootstrapping from seed: %s", seedAddr)
-// 			nd.processNodeAddress(seedAddr)
-// 		}(seed)
-// 		time.Sleep(500 * time.Millisecond)
-// 	}
-	
-// 	wg.Wait()
-// 	log.Println("Bootstrap complete, starting peer discovery...")
-	
-// 	for i := 0; i < 3; i++ {
-// 		log.Printf("Bootstrap peer discovery round %d/3", i+1)
-// 		nd.discoverPeers()
-		
-// 		nd.nodesMutex.RLock()
-// 		nodeCount := len(nd.knownNodes)
-// 		nd.nodesMutex.RUnlock()
-		
-// 		log.Printf("After round %d: %d nodes tracked", i+1, nodeCount)
-		
-// 		if i < 2 {
-// 			time.Sleep(5 * time.Second)
-// 		}
-// 	}
-	
-// 	log.Println("Running initial health check and stats collection...")
-// 	nd.healthCheck()
-// 	time.Sleep(2 * time.Second)
-// 	nd.collectStats()
-	
-// 	nd.nodesMutex.RLock()
-// 	finalCount := len(nd.knownNodes)
-// 	nd.nodesMutex.RUnlock()
-	
-// 	log.Printf("Bootstrap finished. Total nodes discovered: %d", finalCount)
-// }
-
 func (nd *NodeDiscovery) Bootstrap() {
-	log.Println("Starting optimized Bootstrap...")
+	log.Println("Starting optimized Bootstrap (1s gossip propagation)...")
 	
 	// Seed discovery
 	var wg sync.WaitGroup
@@ -243,22 +196,28 @@ func (nd *NodeDiscovery) Bootstrap() {
 			defer wg.Done()
 			nd.processNodeAddress(seedAddr)
 		}(seed)
-		time.Sleep(200 * time.Millisecond) // Reduced from 500ms
+		time.Sleep(200 * time.Millisecond)
 	}
 	wg.Wait()
 	
-	// SINGLE strategic peer discovery
-	log.Println("Strategic peer discovery (1 round only)...")
+	// With 1s gossip, one strategic discovery is enough
+	log.Println("Strategic peer discovery (single round with fast gossip)...")
 	nd.discoverPeersStrategic()
 	
-	// Quick status check on subset
+	// Quick validation of subset
 	log.Println("Quick validation of discovered nodes...")
 	nd.quickValidation()
 	
+	// Give gossip time to propagate (2 min = 120 gossip cycles)
+	log.Println("Waiting for gossip propagation (30 seconds)...")
+	time.Sleep(30 * time.Second)
+	
+	// One more discovery to catch stragglers
+	log.Println("Final discovery sweep...")
+	nd.discoverPeers()
+	
 	log.Printf("Bootstrap complete. Nodes discovered: %d", len(nd.knownNodes))
 }
-
-
 
 
 
@@ -414,62 +373,52 @@ func (nd *NodeDiscovery) quickValidation() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 func (nd *NodeDiscovery) healthCheckOptimized() {
 	nodes := nd.GetNodes()
 	
-	// CRITICAL: Much smaller concurrent limit
-	batchSize := 15 // Process 15 at a time
-	delay := 150 * time.Millisecond // Reduced delay
+	// With 1s gossip, prioritize nodes that SHOULD be fresh but aren't responding
+	// This helps identify truly offline nodes faster
 	
-	log.Printf("Starting optimized health check (%d nodes, batches of %d)...", 
-		len(nodes), batchSize)
+	// Separate into priority groups
+	highPriority := make([]*models.Node, 0)  // Public nodes or nodes with stale gossip
+	lowPriority := make([]*models.Node, 0)   // Private nodes with recent gossip
+	
+	for _, node := range nodes {
+		lastSeen := time.Since(node.LastSeen)
+		
+		// High priority: Check public nodes or nodes approaching stale threshold
+		if node.IsPublic || lastSeen > 3*time.Minute {
+			highPriority = append(highPriority, node)
+		} else if lastSeen > 1*time.Minute {
+			// Medium priority: Private nodes with slightly old gossip
+			lowPriority = append(lowPriority, node)
+		}
+		// Skip: Private nodes with very recent gossip (<1 min) - trust gossip data
+	}
+	
+	// Combine priority groups
+	nodesToCheck := append(highPriority, lowPriority...)
+	
+	batchSize := 10
+	delay := 200 * time.Millisecond
+	
+	start := time.Now()
+	log.Printf("Starting health check (%d nodes: %d high priority, %d low priority, %d skipped)...", 
+		len(nodesToCheck), len(highPriority), len(lowPriority), len(nodes)-len(nodesToCheck))
 	
 	successCount := 0
 	failureCount := 0
+	timeoutCount := 0
 	var resultMutex sync.Mutex
 	
 	// Process in batches
-	for i := 0; i < len(nodes); i += batchSize {
+	for i := 0; i < len(nodesToCheck); i += batchSize {
 		end := i + batchSize
-		if end > len(nodes) {
-			end = len(nodes)
+		if end > len(nodesToCheck) {
+			end = len(nodesToCheck)
 		}
 		
-		batch := nodes[i:end]
+		batch := nodesToCheck[i:end]
 		var wg sync.WaitGroup
 		
 		for _, node := range batch {
@@ -477,10 +426,10 @@ func (nd *NodeDiscovery) healthCheckOptimized() {
 			go func(n *models.Node) {
 				defer wg.Done()
 				
-				start := time.Now()
+				checkStart := time.Now()
 				rpcAddr := nd.getRPCAddress(n)
 				verResp, err := nd.prpc.GetVersion(rpcAddr)
-				latency := time.Since(start).Milliseconds()
+				latency := time.Since(checkStart).Milliseconds()
 				
 				nd.nodesMutex.Lock()
 				if stored, exists := nd.knownNodes[n.ID]; exists {
@@ -493,10 +442,26 @@ func (nd *NodeDiscovery) healthCheckOptimized() {
 						stored.LastSeen = time.Now()
 						stored.Version = verResp.Version
 						
+						// Mark RPC address as working
+						for i := range stored.Addresses {
+							if stored.Addresses[i].Type == "rpc" && stored.Addresses[i].Address == rpcAddr {
+								stored.Addresses[i].IsWorking = true
+								stored.Addresses[i].LastSeen = time.Now()
+								break
+							}
+						}
+						
 						resultMutex.Lock()
 						successCount++
 						resultMutex.Unlock()
 					} else {
+						// Check if timeout
+						if latency > 9000 {
+							resultMutex.Lock()
+							timeoutCount++
+							resultMutex.Unlock()
+						}
+						
 						resultMutex.Lock()
 						failureCount++
 						resultMutex.Unlock()
@@ -511,15 +476,17 @@ func (nd *NodeDiscovery) healthCheckOptimized() {
 			time.Sleep(delay)
 		}
 		
-		wg.Wait() // Wait for batch to complete before next
+		wg.Wait()
 		
 		// Brief pause between batches
-		if end < len(nodes) {
-			time.Sleep(500 * time.Millisecond)
+		if end < len(nodesToCheck) {
+			time.Sleep(1 * time.Second)
 		}
 	}
 	
-	log.Printf("Health check complete: %d success, %d fail", successCount, failureCount)
+	elapsed := time.Since(start)
+	log.Printf("Health check complete in %s: %d success, %d fail (%d timeouts), %d nodes skipped (recent gossip)", 
+		elapsed, successCount, failureCount, timeoutCount, len(nodes)-len(nodesToCheck))
 }
 
 
@@ -543,10 +510,8 @@ func (nd *NodeDiscovery) healthCheckOptimized() {
 
 
 
-
-
 func (nd *NodeDiscovery) processNodeAddress(address string) {
-	nd.failedMutex.RLock()
+		nd.failedMutex.RLock()
 	lastFailed, failed := nd.failedAddresses[address]
 	nd.failedMutex.RUnlock()
 	
@@ -554,14 +519,26 @@ func (nd *NodeDiscovery) processNodeAddress(address string) {
 		return
 	}
 
-	host, portStr, _ := net.SplitHostPort(address)
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		// Handle address without port
+		host = address
+	}
 	port, _ := strconv.Atoi(portStr)
 
+	// CRITICAL FIX: Check if this IP is already tracked
 	nd.allNodesMutex.RLock()
-	_, ipExists := nd.allNodesByIP[host]
+	existingByIP, ipExists := nd.allNodesByIP[host]
 	nd.allNodesMutex.RUnlock()
 	
 	if ipExists {
+		// IP already tracked - just update existing node instead of creating duplicate
+		nd.nodesMutex.Lock()
+		if stored, exists := nd.knownNodes[existingByIP.ID]; exists {
+			stored.LastSeen = time.Now()  // Update last seen
+			utils.DetermineStatus(stored)
+		}
+		nd.nodesMutex.Unlock()
 		return
 	}
 
@@ -847,8 +824,12 @@ func (nd *NodeDiscovery) discoverPeers() {
 	log.Printf("Starting peer discovery from %d online nodes", len(onlineNodes))
 	
 	// Query multiple nodes in parallel to get complete peer list
-	maxNodesToQuery := 10
+	maxNodesToQuery := 7
 	if len(onlineNodes) > maxNodesToQuery {
+		//onlineNodes = onlineNodes[:maxNodesToQuery]
+			sort.Slice(onlineNodes, func(i, j int) bool {
+			return onlineNodes[i].LastSeen.After(onlineNodes[j].LastSeen)
+		})
 		onlineNodes = onlineNodes[:maxNodesToQuery]
 	}
 	
@@ -859,7 +840,7 @@ func (nd *NodeDiscovery) discoverPeers() {
 			defer wg.Done()
 			nd.discoverPeersFromNode(n.Address)
 		}(node)
-		time.Sleep(200 * time.Millisecond) // Stagger queries
+		time.Sleep(300 * time.Millisecond) // Stagger queries
 	}
 	
 	wg.Wait()
@@ -929,45 +910,6 @@ func (nd *NodeDiscovery) matchPodToNode(pod models.Pod, podIP string) {
 		break // Only upgrade one node per IP
 	}
 }
-
-// func (nd *NodeDiscovery) collectStats() {
-// 	nodes := nd.GetNodes()
-
-// 	for _, node := range nodes {
-// 		nd.rateLimiter <- struct{}{}
-
-// 		go func(n *models.Node) {
-// 			defer func() { <-nd.rateLimiter }()
-
-// 			statsResp, err := nd.prpc.GetStats(n.Address)
-// 			if err != nil {
-// 				return
-// 			}
-
-// 			nd.nodesMutex.Lock()
-// 			if storedNode, exists := nd.knownNodes[n.ID]; exists {
-// 				nd.updateStats(storedNode, statsResp)
-// 				storedNode.LastSeen = time.Now()
-// 				storedNode.IsOnline = true
-// 				utils.CalculateScore(storedNode)
-// 				utils.DetermineStatus(storedNode)
-// 			}
-// 			nd.nodesMutex.Unlock()
-
-// 			if n.Pubkey != "" {
-// 				nd.enrichNodeWithCredits(n)
-// 			}
-// 		}(node)
-// 	}
-
-// 	time.Sleep(2 * time.Second)
-// }
-
-
-
-
-
-
 
 
 
@@ -1228,13 +1170,25 @@ func (nd *NodeDiscovery) createNodeFromPod(pod *models.Pod) {
 		nodeID = pod.Pubkey
 	}
 
-	nd.allNodesMutex.RLock()
-	_, ipExists := nd.allNodesByIP[podHost]
+	// nd.allNodesMutex.RLock()
+	// _, ipExists := nd.allNodesByIP[podHost]
+	// nd.allNodesMutex.RUnlock()
+
+		nd.allNodesMutex.RLock()
+	existingByIP, ipExists := nd.allNodesByIP[podHost]
 	nd.allNodesMutex.RUnlock()
 
 	nd.nodesMutex.Lock()
 	existingNode, exists := nd.knownNodes[nodeID]
 	nd.nodesMutex.Unlock()
+
+		if ipExists && !exists {
+		// Found by IP but not by ID - update the IP-based node
+		nd.nodesMutex.Lock()
+		nd.updateNodeFromPod(existingByIP, pod)
+		nd.nodesMutex.Unlock()
+		return
+	}
 
 	if exists {
 		nd.nodesMutex.Lock()

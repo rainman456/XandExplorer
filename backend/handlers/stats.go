@@ -7,6 +7,8 @@ import (
 )
 
 
+
+
 func (h *Handler) GetStats(c echo.Context) error {
 	// Try to get fresh stats first
 	stats, stale, found := h.Cache.GetNetworkStats(false)
@@ -27,27 +29,17 @@ func (h *Handler) GetStats(c echo.Context) error {
 		}
 	}
 
-	// Get all nodes to calculate public/private counts AND aggregate RPC stats
+	// Get all nodes to aggregate RPC stats
 	nodes, _, nodesFound := h.Cache.GetNodes(true)
-	
-	var publicNodes, privateNodes int
 	
 	// Aggregate RPC stats from nodes (CPU, RAM, packets, uptime, etc.)
 	var totalCPU, totalRAMUsed, totalRAMTotal float64
 	var totalPacketsReceived, totalPacketsSent int64
 	var totalUptime int64
-	//var totalActiveStreams int
 	var nodesWithStats int
 	
 	if nodesFound {
 		for _, node := range nodes {
-			// Count public/private
-			if node.IsPublic {
-				publicNodes++
-			} else {
-				privateNodes++
-			}
-			
 			// Aggregate RPC stats (from get-stats calls stored in node)
 			if node.CPUPercent > 0 || node.RAMUsed > 0 {
 				totalCPU += node.CPUPercent
@@ -70,7 +62,7 @@ func (h *Handler) GetStats(c echo.Context) error {
 		avgUptime = float64(totalUptime) / float64(nodesWithStats)
 	}
 
-	// Build enhanced response with BOTH aggregated metrics AND RPC stats
+	// Build enhanced response
 	response := NetworkStatsResponse{
 		// Node counts (from aggregation)
 		TotalNodes:   stats.TotalNodes,
@@ -78,8 +70,12 @@ func (h *Handler) GetStats(c echo.Context) error {
 		OnlineNodes:  stats.OnlineNodes,
 		WarningNodes: stats.WarningNodes,
 		OfflineNodes: stats.OfflineNodes,
-		PublicNodes:  publicNodes,
-		PrivateNodes: privateNodes,
+		
+		// NEW: Public/Private breakdown
+		TotalPublicNodes:   stats.TotalPublicNodes,
+		TotalPrivateNodes:  stats.TotalPrivateNodes,
+		OnlinePublicNodes:  stats.OnlinePublicNodes,
+		OnlinePrivateNodes: stats.OnlinePrivateNodes,
 		
 		// Storage metrics (from aggregation)
 		TotalStorageBytes:              stats.TotalStorage,
@@ -92,7 +88,7 @@ func (h *Handler) GetStats(c echo.Context) error {
 		TotalStake:         stats.TotalStake,
 		NetworkHealth:      stats.NetworkHealth,
 		
-		// RPC Stats (from get-stats calls) - NEW!
+		// RPC Stats (from get-stats calls)
 		AverageCPUPercent:       avgCPU,
 		AverageRAMUsedBytes:     int64(avgRAMUsed),
 		AverageRAMTotalBytes:    int64(avgRAMTotal),
@@ -115,7 +111,10 @@ func (h *Handler) GetStats(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-// NetworkStatsResponse represents the enhanced stats response with RPC data
+
+
+
+
 type NetworkStatsResponse struct {
 	// Node counts
 	TotalNodes   int `json:"total_nodes"`   // All IP addresses
@@ -123,8 +122,12 @@ type NetworkStatsResponse struct {
 	OnlineNodes  int `json:"online_nodes"`
 	WarningNodes int `json:"warning_nodes"`
 	OfflineNodes int `json:"offline_nodes"`
-	PublicNodes  int `json:"public_nodes"`
-	PrivateNodes int `json:"private_nodes"`
+	
+	// NEW: Public/Private breakdown
+	TotalPublicNodes   int `json:"total_public_nodes"`
+	TotalPrivateNodes  int `json:"total_private_nodes"`
+	OnlinePublicNodes  int `json:"online_public_nodes"`  // NEW
+	OnlinePrivateNodes int `json:"online_private_nodes"` // NEW
 	
 	// Storage metrics
 	TotalStorageBytes              float64 `json:"total_storage_bytes"`
@@ -137,7 +140,7 @@ type NetworkStatsResponse struct {
 	TotalStake         int64   `json:"total_stake"`
 	NetworkHealth      float64 `json:"network_health"`
 	
-	// RPC Stats (from get-stats calls) - NEW!
+	// RPC Stats (from get-stats calls)
 	AverageCPUPercent       float64 `json:"average_cpu_percent"`
 	AverageRAMUsedBytes     int64   `json:"average_ram_used_bytes"`
 	AverageRAMTotalBytes    int64   `json:"average_ram_total_bytes"`

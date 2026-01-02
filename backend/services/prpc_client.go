@@ -19,31 +19,6 @@ type PRPCClient struct {
 	httpClient *http.Client
 }
 
-// func NewPRPCClient(cfg *config.Config) *PRPCClient {
-// 	// Use configured timeout or default to 5 seconds
-// 	timeout := cfg.PRPCTimeoutDuration()
-// 	if timeout > 10*time.Second {
-// 		timeout = 5 * time.Second // Cap at 5 seconds for faster failures
-// 	}
-	
-// 	return &PRPCClient{
-// 		config: cfg,
-// 		httpClient: &http.Client{
-// 			Timeout: timeout,
-// 			Transport: &http.Transport{
-// 				MaxIdleConns:        100,
-// 				MaxIdleConnsPerHost: 10,
-// 				IdleConnTimeout:     30 * time.Second,
-// 				DisableKeepAlives:   false,
-// 			},
-// 		},
-// 	}
-// }
-
-
-
-
-// REPLACE NewPRPCClient in services/prpc_client.go
 
 func NewPRPCClient(cfg *config.Config) *PRPCClient {
 	// CRITICAL FIX: Use longer timeout for health checks

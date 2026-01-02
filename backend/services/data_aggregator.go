@@ -19,9 +19,8 @@ func NewDataAggregator(discovery *NodeDiscovery) *DataAggregator {
 	}
 }
 
-// OPTIMIZED: Don't recalculate status - trust existing values
+
 func (da *DataAggregator) Aggregate() models.NetworkStats {
-	// Get snapshot quickly without recalculating everything
 	allNodes := da.discovery.GetAllNodes()
 	
 	log.Printf("Aggregating stats from %d nodes", len(allNodes))
@@ -44,7 +43,7 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 	var totalCredits int64
 	var nodesWithCredits int
 	
-	// CRITICAL: Just aggregate, don't recalculate status
+	// Aggregate with public/private tracking
 	for _, node := range allNodes {
 		// Track unique pubkeys
 		if node.Pubkey != "" && node.Pubkey != "unknown" {
@@ -54,10 +53,23 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 			}
 		}
 		
+		// Count public/private totals
+		if node.IsPublic {
+			aggr.TotalPublicNodes++
+		} else {
+			aggr.TotalPrivateNodes++
+		}
+		
 		// Use existing status (don't recalculate)
 		switch node.Status {
 		case "online":
 			aggr.OnlineNodes++
+			// NEW: Track online public/private split
+			if node.IsPublic {
+				aggr.OnlinePublicNodes++
+			} else {
+				aggr.OnlinePrivateNodes++
+			}
 		case "warning":
 			aggr.WarningNodes++
 		case "offline":
@@ -110,9 +122,10 @@ func (da *DataAggregator) Aggregate() models.NetworkStats {
 		avgCredits = totalCredits / int64(nodesWithCredits)
 	}
 	
-	log.Printf("Aggregated: %d IPs, %d pods. Online=%d, Warning=%d, Offline=%d. Health=%.1f%%. Avg credits=%d",
+	log.Printf("Aggregated: %d IPs, %d pods. Online=%d (Public=%d, Private=%d), Warning=%d, Offline=%d. Health=%.1f%%. Avg credits=%d",
 		aggr.TotalNodes, aggr.TotalPods,
-		aggr.OnlineNodes, aggr.WarningNodes, aggr.OfflineNodes,
+		aggr.OnlineNodes, aggr.OnlinePublicNodes, aggr.OnlinePrivateNodes,
+		aggr.WarningNodes, aggr.OfflineNodes,
 		aggr.NetworkHealth, avgCredits)
 	
 	return aggr
