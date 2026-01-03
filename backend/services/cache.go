@@ -356,24 +356,51 @@ func (cs *CacheService) Get(key string) (interface{}, bool) {
 }
 
 // GetWithStale retrieves data and indicates if it's stale
+// func (cs *CacheService) GetWithStale(key string) (interface{}, bool, bool) {
+// 	mode := cs.getMode()
+
+// 	if mode == CacheModeRedis {
+// 		data, found, err := cs.getRedis(key)
+// 		if err != nil {
+// 			data, found := cs.getInMemory(key)
+			
+// 			return data, false, found
+// 		}
+// 		log.Printf("Redis GET failed for '%s': %v (falling back to in-memory)", key, err)
+// 		// Redis manages TTL, so if found, it's fresh
+// 		return data, false, found
+		
+// 	}
+
+// 	return cs.getInMemoryWithStale(key)
+// }
+
+
+
+
+
+
 func (cs *CacheService) GetWithStale(key string) (interface{}, bool, bool) {
 	mode := cs.getMode()
 
 	if mode == CacheModeRedis {
 		data, found, err := cs.getRedis(key)
 		if err != nil {
+			log.Printf("⚠️  Redis GET failed for '%s': %v (falling back to in-memory)", key, err)
+			// Fall back to in-memory cache
 			data, found := cs.getInMemory(key)
-			
 			return data, false, found
 		}
-		log.Printf("Redis GET failed for '%s': %v (falling back to in-memory)", key, err)
 		// Redis manages TTL, so if found, it's fresh
 		return data, false, found
-		
 	}
 
 	return cs.getInMemoryWithStale(key)
 }
+
+
+
+
 
 // ============================================
 // Redis Operations
@@ -391,9 +418,58 @@ func (cs *CacheService) setRedis(key string, data interface{}, ttl time.Duration
 	if err != nil {
 		return fmt.Errorf("marshal failed: %w", err)
 	}
+	log.Printf("Redis SET '%s': %d bytes", key, len(jsonData))
 
 	return cs.redis.Set(ctx, key, jsonData, ttl).Err()
 }
+
+// func (cs *CacheService) getRedis(key string) (interface{}, bool, error) {
+// 	if cs.redis == nil {
+// 		return nil, false, fmt.Errorf("redis client not initialized")
+// 	}
+
+// 	ctx, cancel := context.WithTimeout(cs.redisCtx, 2*time.Second)
+// 	defer cancel()
+
+// 	jsonData, err := cs.redis.Get(ctx, key).Result()
+// 	if err == redis.Nil {
+// 		return nil, false, nil
+// 	}
+// 	if err != nil {
+// 		return nil, false, err
+// 	}
+
+// 	// Deserialize based on key pattern
+// 	var data interface{}
+
+// 	switch {
+// 	case key == "stats":
+// 		var stats models.NetworkStats
+// 		if err := json.Unmarshal([]byte(jsonData), &stats); err != nil {
+// 			return nil, false, err
+// 		}
+// 		data = stats
+// 	case key == "nodes":
+// 		var nodes []*models.Node
+// 		if err := json.Unmarshal([]byte(jsonData), &nodes); err != nil {
+// 			return nil, false, err
+// 		}
+// 		data = nodes
+// 	case strings.HasPrefix(key, "node:"):
+// 		var node models.Node
+// 		if err := json.Unmarshal([]byte(jsonData), &node); err != nil {
+// 			return nil, false, err
+// 		}
+// 		data = &node
+// 	default:
+// 		if err := json.Unmarshal([]byte(jsonData), &data); err != nil {
+// 			return nil, false, err
+// 		}
+// 	}
+
+// 	return data, true, nil
+// }
+
 
 func (cs *CacheService) getRedis(key string) (interface{}, bool, error) {
 	if cs.redis == nil {
@@ -405,9 +481,11 @@ func (cs *CacheService) getRedis(key string) (interface{}, bool, error) {
 
 	jsonData, err := cs.redis.Get(ctx, key).Result()
 	if err == redis.Nil {
+		// Key doesn't exist - this is NOT an error
 		return nil, false, nil
 	}
 	if err != nil {
+		// Actual Redis error (connection, timeout, etc.)
 		return nil, false, err
 	}
 
@@ -418,29 +496,50 @@ func (cs *CacheService) getRedis(key string) (interface{}, bool, error) {
 	case key == "stats":
 		var stats models.NetworkStats
 		if err := json.Unmarshal([]byte(jsonData), &stats); err != nil {
-			return nil, false, err
+			log.Printf("⚠️  Failed to unmarshal stats from Redis: %v", err)
+			return nil, false, fmt.Errorf("unmarshal stats failed: %w", err)
 		}
 		data = stats
-	case key == "nodes":
+		
+	case key == "nodes" || key == "nodes:unique":
 		var nodes []*models.Node
 		if err := json.Unmarshal([]byte(jsonData), &nodes); err != nil {
-			return nil, false, err
+			log.Printf("⚠️  Failed to unmarshal nodes from Redis: %v", err)
+			log.Printf("   Data length: %d bytes, first 100 chars: %s", 
+				len(jsonData), jsonData[:min(100, len(jsonData))])
+			return nil, false, fmt.Errorf("unmarshal nodes failed: %w", err)
 		}
 		data = nodes
+		
 	case strings.HasPrefix(key, "node:"):
 		var node models.Node
 		if err := json.Unmarshal([]byte(jsonData), &node); err != nil {
-			return nil, false, err
+			log.Printf("⚠️  Failed to unmarshal node '%s' from Redis: %v", key, err)
+			return nil, false, fmt.Errorf("unmarshal node failed: %w", err)
 		}
 		data = &node
+		
 	default:
+		// Generic unmarshal for unknown keys
 		if err := json.Unmarshal([]byte(jsonData), &data); err != nil {
-			return nil, false, err
+			log.Printf("⚠️  Failed to unmarshal generic data for key '%s': %v", key, err)
+			return nil, false, fmt.Errorf("unmarshal failed: %w", err)
 		}
 	}
 
 	return data, true, nil
 }
+
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+
+
 
 // ============================================
 // In-Memory Operations (Fallback)
